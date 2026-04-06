@@ -10,6 +10,11 @@ class Settings:
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8080"))
         self.debug = os.environ.get("DEBUG", "false").lower() == "true"
+        self.cache_ttl = int(os.environ.get("CACHE_TTL", "15"))
+        self.min_volume_24h = float(os.environ.get("MIN_VOLUME_24H", "100000"))
+        self.proxy_enabled = os.environ.get("PROXY_ENABLED", "false").lower() == "true"
+        self.proxy_host = os.environ.get("PROXY_HOST", "127.0.0.1")
+        self.proxy_port = os.environ.get("PROXY_PORT", "24000")
 
 
 settings = Settings()

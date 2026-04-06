@@ -85,4 +85,36 @@ export const api = {
   async testChannel(id) {
     return request(`/channels/${id}/test`, { method: 'POST' })
   },
+
+  async listTasks() {
+    return request('/tasks')
+  },
+
+  async createTask(data) {
+    return request('/tasks', { method: 'POST', body: JSON.stringify(data) })
+  },
+
+  async updateTask(id, data) {
+    return request(`/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) })
+  },
+
+  async deleteTask(id) {
+    return request(`/tasks/${id}`, { method: 'DELETE' })
+  },
+
+  async startTask(id) {
+    return request(`/tasks/${id}/start`, { method: 'POST' })
+  },
+
+  async stopTask(id) {
+    return request(`/tasks/${id}/stop`, { method: 'POST' })
+  },
+
+  async testTask(id) {
+    return request(`/tasks/${id}/test`, { method: 'POST' })
+  },
+
+  async getScreeners() {
+    return request('/tasks/screeners')
+  },
 }

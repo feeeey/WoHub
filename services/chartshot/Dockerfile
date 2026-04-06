@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright/python:v1.50.0-noble
+FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 
 ENV TZ=Asia/Shanghai
 ENV DEBIAN_FRONTEND=noninteractive

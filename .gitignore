@@ -26,7 +26,7 @@ Thumbs.db
 # Env
 .env
 
-# Existing projects (reference only)
-CryptoFuturesHub/
-pine-screener/
-ChartShot/
+# Existing projects (reference only, root-level only)
+/CryptoFuturesHub/
+/pine-screener/
+/ChartShot/

@@ -19,7 +19,7 @@ services:
 
   chartshot:
     build:
-      context: ./chartshot
+      context: ./services/chartshot
     volumes:
       - ./data/screenshots:/app/output
     environment:

@@ -20,8 +20,10 @@ services:
   chartshot:
     build:
       context: ./services/chartshot
+    shm_size: 2gb
     volumes:
       - ./data/screenshots:/app/output
+      - ./data/cookies:/app/cookies
     environment:
-      - TZ=UTC
+      - TZ=Asia/Shanghai
     restart: unless-stopped

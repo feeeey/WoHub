@@ -85,3 +85,26 @@ class TestBitget:
         assert len(data) > 0
         _validate_funding(data[0])
         assert data[0]["exchange"] == "Bitget"
+
+
+class TestAggregator:
+    def test_fetch_all_tickers(self):
+        from sources.exchanges import fetch_all_tickers
+        data, errors = fetch_all_tickers()
+        assert isinstance(data, list)
+        assert isinstance(errors, list)
+        assert len(data) > 0
+        exchanges = {t["exchange"] for t in data}
+        assert len(exchanges) >= 2  # at least 2 exchanges responded
+
+    def test_fetch_all_funding_rates(self):
+        from sources.exchanges import fetch_all_funding_rates
+        data, errors = fetch_all_funding_rates()
+        assert isinstance(data, list)
+        assert len(data) > 0
+
+    def test_results_are_cached(self):
+        from sources.exchanges import fetch_all_tickers
+        d1, _ = fetch_all_tickers()
+        d2, _ = fetch_all_tickers()
+        assert d1 is d2

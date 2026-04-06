@@ -65,4 +65,24 @@ export const api = {
     const res = await fetch(`${BASE}/market/export?exchange=${exchange}`)
     return res.text()
   },
+
+  async listChannels() {
+    return request('/channels')
+  },
+
+  async createChannel(data) {
+    return request('/channels', { method: 'POST', body: JSON.stringify(data) })
+  },
+
+  async updateChannel(id, data) {
+    return request(`/channels/${id}`, { method: 'PUT', body: JSON.stringify(data) })
+  },
+
+  async deleteChannel(id) {
+    return request(`/channels/${id}`, { method: 'DELETE' })
+  },
+
+  async testChannel(id) {
+    return request(`/channels/${id}/test`, { method: 'POST' })
+  },
 }

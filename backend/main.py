@@ -11,7 +11,11 @@ from api import api_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db(settings.db_path)
+    from api.tasks import start_all_enabled
+    start_all_enabled()
     yield
+    from tasks.scheduler import stop_scheduler
+    stop_scheduler()
 
 
 app = FastAPI(title="WoHub", lifespan=lifespan)

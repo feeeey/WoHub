@@ -4,6 +4,7 @@ import Tasks from '../views/Tasks.vue'
 import Market from '../views/Market.vue'
 import Channels from '../views/Channels.vue'
 import Settings from '../views/Settings.vue'
+import AI from '../views/AI.vue'
 
 const routes = [
   { path: '/login', component: Login, meta: { public: true } },
@@ -12,6 +13,7 @@ const routes = [
   { path: '/market', component: Market },
   { path: '/channels', component: Channels },
   { path: '/settings', component: Settings },
+  { path: '/ai', component: AI },
 ]
 
 const router = createRouter({

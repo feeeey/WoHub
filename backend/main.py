@@ -11,6 +11,8 @@ from api import api_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db(settings.db_path)
+    from ai.strategy import ensure_default_strategy
+    ensure_default_strategy()
     from api.tasks import start_all_enabled
     start_all_enabled()
     yield

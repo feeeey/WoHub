@@ -9,13 +9,12 @@ import threading
 from datetime import datetime, timezone
 from database import get_db
 from config import settings
+from sources.exchanges import fetch_all_tickers, fetch_all_funding_rates
 
 
 def record_snapshot(signal_id, symbol, exchange):
     """Record market snapshot at signal time. Called by executor after recording signal."""
     try:
-        from sources.exchanges import fetch_all_tickers, fetch_all_funding_rates
-
         tickers, _ = fetch_all_tickers()
         funding, _ = fetch_all_funding_rates()
 
@@ -68,8 +67,6 @@ def schedule_outcome_tracking(signal_id, symbol, exchange):
 def _check_outcome(signal_id, symbol, exchange, period):
     """Called by timer to record price at 1h/4h/24h after signal."""
     try:
-        from sources.exchanges import fetch_all_tickers
-
         tickers, _ = fetch_all_tickers()
         current_price = 0.0
         for t in tickers:

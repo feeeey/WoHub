@@ -1,11 +1,10 @@
-from sources.http_client import get_session
+from sources.http_client import fetch_with_fallback
 
 BASE = "https://api.bitget.com"
 
 
 def get_tickers():
-    resp = get_session().get(f"{BASE}/api/v2/mix/market/tickers?productType=USDT-FUTURES")
-    resp.raise_for_status()
+    resp = fetch_with_fallback("get", f"{BASE}/api/v2/mix/market/tickers?productType=USDT-FUTURES")
     result = []
     for t in resp.json().get("data", []):
         sym = t.get("symbol", "")
@@ -24,10 +23,9 @@ def get_tickers():
 
 
 def get_funding_rates():
-    resp = get_session().get(
-        f"{BASE}/api/v2/mix/market/current-fund-rate?productType=USDT-FUTURES"
+    resp = fetch_with_fallback(
+        "get", f"{BASE}/api/v2/mix/market/current-fund-rate?productType=USDT-FUTURES"
     )
-    resp.raise_for_status()
     rates = {r["symbol"]: r for r in resp.json().get("data", [])}
 
     tickers = {t["symbol"]: t for t in get_tickers()}

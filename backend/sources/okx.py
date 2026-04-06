@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from sources.http_client import get_session
+from sources.http_client import fetch_with_fallback, get_session
 
 BASE = "https://www.okx.com"
 
@@ -9,8 +9,7 @@ def _to_symbol(inst_id: str) -> str:
 
 
 def get_tickers():
-    resp = get_session().get(f"{BASE}/api/v5/market/tickers?instType=SWAP")
-    resp.raise_for_status()
+    resp = fetch_with_fallback("get", f"{BASE}/api/v5/market/tickers?instType=SWAP")
     result = []
     for t in resp.json().get("data", []):
         if "-USDT-SWAP" not in t["instId"]:
@@ -31,8 +30,7 @@ def get_tickers():
 
 
 def get_funding_rates():
-    resp = get_session().get(f"{BASE}/api/v5/public/instruments?instType=SWAP")
-    resp.raise_for_status()
+    resp = fetch_with_fallback("get", f"{BASE}/api/v5/public/instruments?instType=SWAP")
     instruments = [
         i["instId"]
         for i in resp.json().get("data", [])

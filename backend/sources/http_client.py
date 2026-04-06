@@ -5,6 +5,8 @@ from config import settings
 
 _session = None
 _session_lock = threading.Lock()
+_direct_session = None
+_direct_lock = threading.Lock()
 
 _cache = {}
 _cache_lock = threading.Lock()
@@ -27,11 +29,45 @@ def get_session() -> requests.Session:
         return _session
 
 
+def _get_direct_session() -> requests.Session:
+    """Session without proxy for fallback."""
+    global _direct_session
+    if _direct_session is not None:
+        return _direct_session
+    with _direct_lock:
+        if _direct_session is not None:
+            return _direct_session
+        s = requests.Session()
+        s.timeout = 10
+        s.headers.update({"User-Agent": "WoHub/0.1"})
+        _direct_session = s
+        return _direct_session
+
+
+def fetch_with_fallback(method, url, **kwargs):
+    """Try with proxy session first. If proxy fails, retry with direct connection."""
+    session = get_session()
+    try:
+        resp = getattr(session, method)(url, **kwargs)
+        resp.raise_for_status()
+        return resp
+    except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
+        if not settings.proxy_enabled:
+            raise
+        print(f"[http] Proxy failed for {url}, falling back to direct: {e}")
+        direct = _get_direct_session()
+        resp = getattr(direct, method)(url, **kwargs)
+        resp.raise_for_status()
+        return resp
+
+
 def reset_session():
-    """Reset the HTTP session so it picks up new proxy settings."""
-    global _session
+    """Reset HTTP sessions so they pick up new proxy settings."""
+    global _session, _direct_session
     with _session_lock:
         _session = None
+    with _direct_lock:
+        _direct_session = None
 
 
 def cached(key: str, fetcher, ttl: float = None):

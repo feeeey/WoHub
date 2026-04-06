@@ -1,11 +1,10 @@
-from sources.http_client import get_session
+from sources.http_client import fetch_with_fallback
 
 BASE = "https://api.bybit.com"
 
 
 def _fetch_linear():
-    resp = get_session().get(f"{BASE}/v5/market/tickers?category=linear")
-    resp.raise_for_status()
+    resp = fetch_with_fallback("get", f"{BASE}/v5/market/tickers?category=linear")
     return [
         t for t in resp.json().get("result", {}).get("list", [])
         if t["symbol"].endswith("USDT")

@@ -1,11 +1,10 @@
-from sources.http_client import get_session
+from sources.http_client import fetch_with_fallback
 
 BASE = "https://fapi.binance.com"
 
 
 def _active_symbols():
-    resp = get_session().get(f"{BASE}/fapi/v1/exchangeInfo")
-    resp.raise_for_status()
+    resp = fetch_with_fallback("get", f"{BASE}/fapi/v1/exchangeInfo")
     return {
         s["symbol"]
         for s in resp.json()["symbols"]
@@ -15,8 +14,7 @@ def _active_symbols():
 
 def get_tickers():
     active = _active_symbols()
-    resp = get_session().get(f"{BASE}/fapi/v1/ticker/24hr")
-    resp.raise_for_status()
+    resp = fetch_with_fallback("get", f"{BASE}/fapi/v1/ticker/24hr")
     result = []
     for t in resp.json():
         sym = t["symbol"]
@@ -36,8 +34,7 @@ def get_tickers():
 
 def get_funding_rates():
     active = _active_symbols()
-    resp = get_session().get(f"{BASE}/fapi/v1/premiumIndex")
-    resp.raise_for_status()
+    resp = fetch_with_fallback("get", f"{BASE}/fapi/v1/premiumIndex")
     result = []
     for f in resp.json():
         sym = f["symbol"]

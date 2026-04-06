@@ -11,7 +11,7 @@
 
     <!-- Create Form -->
     <div v-if="showCreate" class="card" style="margin-bottom: 24px">
-      <h3 style="margin-bottom: 16px">创建任务</h3>
+      <h3 style="margin-bottom: 16px">{{ editingId ? '编辑任务' : '创建任务' }}</h3>
       <form @submit.prevent="handleCreate">
         <div class="form-row">
           <div class="form-group">
@@ -190,8 +190,8 @@
           </div>
         </div>
         <div class="form-actions">
-          <button type="submit" class="btn btn-primary">创建</button>
-          <button type="button" class="btn" @click="showCreate = false">取消</button>
+          <button type="submit" class="btn btn-primary">{{ editingId ? '保存修改' : '创建' }}</button>
+          <button type="button" class="btn" @click="cancelForm">取消</button>
         </div>
       </form>
     </div>
@@ -219,6 +219,7 @@
           <span class="task-schedule">{{ t.schedule_desc }}</span>
         </div>
         <div class="task-actions">
+          <button class="btn btn-sm" @click="editTask(t)">编辑</button>
           <button class="btn btn-sm" @click="testRun(t)" :disabled="t.testing">
             {{ t.testing ? '执行中...' : '测试' }}
           </button>
@@ -243,6 +244,7 @@ const channels = ref([])
 const screeners = ref([])
 const watchlists = ref({})
 const showCreate = ref(false)
+const editingId = ref(null)
 const symbolsInput = ref('')
 const allResolutions = ['5m', '15m', '30m', '1h', '4h', '1d', '1w']
 
@@ -274,6 +276,7 @@ function onTypeChange() {
 }
 
 function openCreate() {
+  editingId.value = null
   form.value = {
     name: '', type: 'watchlist_signal', schedule: '1h',
     channel_id: null, actions: ['text_summary'],
@@ -281,6 +284,29 @@ function openCreate() {
   }
   symbolsInput.value = ''
   showCreate.value = true
+}
+
+function editTask(t) {
+  editingId.value = t.id
+  form.value = {
+    name: t.name,
+    type: t.type,
+    schedule: t.schedule,
+    channel_id: t.channel_id,
+    actions: [...(t.actions || [])],
+    config: JSON.parse(JSON.stringify(t.config || {})),
+  }
+  if (t.type === 'scheduled_shot' && t.config?.symbols) {
+    symbolsInput.value = t.config.symbols.join(', ')
+  } else {
+    symbolsInput.value = ''
+  }
+  showCreate.value = true
+}
+
+function cancelForm() {
+  showCreate.value = false
+  editingId.value = null
 }
 
 async function loadTasks() {
@@ -304,12 +330,16 @@ async function loadWatchlists() {
 
 async function handleCreate() {
   const data = { ...form.value }
-  // For scheduled_shot, parse symbols from comma-separated input
   if (data.type === 'scheduled_shot') {
     data.config.symbols = symbolsInput.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
   }
-  await api.createTask(data)
+  if (editingId.value) {
+    await api.updateTask(editingId.value, data)
+  } else {
+    await api.createTask(data)
+  }
   showCreate.value = false
+  editingId.value = null
   await loadTasks()
 }
 

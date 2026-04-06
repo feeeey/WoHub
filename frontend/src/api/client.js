@@ -121,4 +121,32 @@ export const api = {
   async getWatchlists() {
     return request('/tasks/watchlists')
   },
+
+  async getSettings() {
+    return request('/settings/info')
+  },
+
+  async getCookies() {
+    return request('/settings/cookies')
+  },
+
+  async updateCookies(raw) {
+    return request('/settings/cookies', { method: 'PUT', body: JSON.stringify({ cookies: raw }) })
+  },
+
+  async getChartshotStatus() {
+    return request('/settings/chartshot/status')
+  },
+
+  async getChartshotCookies() {
+    return request('/settings/chartshot/cookies')
+  },
+
+  async updateChartshotCookies(raw) {
+    return request('/settings/chartshot/cookies', { method: 'PUT', body: JSON.stringify({ cookies: raw }) })
+  },
+
+  async testChartshotCookies() {
+    return request('/settings/chartshot/cookies/test', { method: 'POST' })
+  },
 }

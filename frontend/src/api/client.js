@@ -1,6 +1,47 @@
+const BASE = '/api'
+
+async function request(path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+    ...options,
+  })
+
+  if (res.status === 401 && !path.startsWith('/auth/')) {
+    window.location.href = '/login'
+    throw new Error('Unauthorized')
+  }
+
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status}`)
+  }
+
+  return res.json()
+}
+
 export const api = {
-  async login() {},
-  async logout() {},
-  async authStatus() {},
-  async health() {},
+  async login(password) {
+    const form = new URLSearchParams()
+    form.append('password', password)
+    const res = await fetch(`${BASE}/auth/login`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!res.ok) throw new Error('Login failed')
+    return res.json()
+  },
+
+  async logout() {
+    return request('/auth/logout', { method: 'POST' })
+  },
+
+  async authStatus() {
+    return request('/auth/status')
+  },
+
+  async health() {
+    return request('/health')
+  },
 }

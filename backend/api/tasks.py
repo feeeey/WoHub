@@ -55,6 +55,15 @@ def get_screeners():
     return list_screeners()
 
 
+@router.get("/watchlists")
+def get_watchlists():
+    try:
+        from sources.pine_screener import fetch_watchlists
+        return {"ok": True, "watchlists": fetch_watchlists()}
+    except Exception as e:
+        return {"ok": False, "watchlists": {}, "error": str(e)}
+
+
 @router.get("")
 def list_tasks():
     db = get_db(settings.db_path)

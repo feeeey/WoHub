@@ -236,7 +236,10 @@ def _log_push(task_id, channel, content, status="success", error=None):
 
 
 def _record_signals(task_id, overlaps, resolutions, all_results):
+    """Record signals to the signals table and schedule outcome tracking."""
     try:
+        from tasks.tracker import record_snapshot, schedule_outcome_tracking
+
         db = get_db(settings.db_path)
         for sym, labels in overlaps.items():
             clean = sym.replace("BINANCE:", "").replace(".P", "")
@@ -245,12 +248,19 @@ def _record_signals(task_id, overlaps, resolutions, all_results):
                 exchange = "OKX"
             elif "BYBIT:" in sym:
                 exchange = "Bybit"
+
             for label in labels:
                 for res in resolutions:
-                    db.execute(
+                    cursor = db.execute(
                         "INSERT INTO signals (task_id, symbol, exchange, indicator, timeframe) VALUES (?, ?, ?, ?, ?)",
                         (task_id, clean, exchange, label, res),
                     )
+                    signal_id = cursor.lastrowid
+
+                    # Record snapshot and schedule outcome tracking
+                    record_snapshot(signal_id, clean, exchange)
+                    schedule_outcome_tracking(signal_id, clean, exchange)
+
         db.commit()
         db.close()
     except Exception as e:

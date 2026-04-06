@@ -1,7 +1,10 @@
 from config import Settings
 
 
-def test_default_settings():
+def test_default_settings(monkeypatch):
+    monkeypatch.delenv("APP_PASSWORD", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    monkeypatch.delenv("DB_PATH", raising=False)
     settings = Settings()
     assert settings.app_password == "admin"
     assert settings.secret_key == "change-me-in-production"

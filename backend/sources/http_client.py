@@ -27,6 +27,13 @@ def get_session() -> requests.Session:
         return _session
 
 
+def reset_session():
+    """Reset the HTTP session so it picks up new proxy settings."""
+    global _session
+    with _session_lock:
+        _session = None
+
+
 def cached(key: str, fetcher, ttl: float = None):
     if ttl is None:
         ttl = settings.cache_ttl

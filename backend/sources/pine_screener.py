@@ -35,6 +35,11 @@ _HEADERS = {
 _session = None
 
 
+def reset_session():
+    global _session
+    _session = None
+
+
 def _get_session():
     global _session
     if _session is None:

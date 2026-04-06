@@ -106,7 +106,46 @@ def get_info():
         "cache_ttl": settings.cache_ttl,
         "min_volume_24h": settings.min_volume_24h,
         "proxy_enabled": settings.proxy_enabled,
-        "proxy_host": settings.proxy_host if settings.proxy_enabled else "",
-        "proxy_port": settings.proxy_port if settings.proxy_enabled else "",
+        "proxy_host": settings.proxy_host,
+        "proxy_port": settings.proxy_port,
         "chartshot_url": settings.chartshot_url,
     }
+
+
+@router.get("/proxy")
+def get_proxy():
+    """Get proxy configuration."""
+    return {
+        "enabled": settings.proxy_enabled,
+        "host": settings.proxy_host,
+        "port": settings.proxy_port,
+        "scope": [
+            "交易所 API（Binance, OKX, Bybit, Bitget）",
+            "TradingView Pine 筛选 API",
+            "AI API（如使用海外服务）",
+        ],
+    }
+
+
+@router.put("/proxy")
+def update_proxy(body: dict):
+    """Update proxy configuration. Takes effect after restart or session reset."""
+    enabled = body.get("enabled")
+    host = body.get("host", "").strip()
+    port = body.get("port", "").strip()
+
+    if enabled is not None:
+        settings.proxy_enabled = bool(enabled)
+    if host:
+        settings.proxy_host = host
+    if port:
+        settings.proxy_port = str(port)
+
+    # Reset HTTP sessions so they pick up new proxy
+    from sources.http_client import reset_session
+    reset_session()
+
+    from sources.pine_screener import reset_session as reset_pine_session
+    reset_pine_session()
+
+    return {"ok": True, "enabled": settings.proxy_enabled, "host": settings.proxy_host, "port": settings.proxy_port}

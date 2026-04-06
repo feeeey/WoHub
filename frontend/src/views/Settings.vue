@@ -85,6 +85,34 @@
       </div>
     </div>
 
+    <!-- Proxy Configuration -->
+    <div class="card section">
+      <div class="section-header">
+        <h3 class="section-title">网络代理</h3>
+        <span class="badge" :class="proxyEnabled ? 'badge-success' : 'badge-danger'">
+          {{ proxyEnabled ? '已启用' : '未启用' }}
+        </span>
+      </div>
+      <p class="section-desc">
+        代理用于访问被封锁的外部服务。生效范围：交易所 API（Binance/Bybit）、TradingView Pine 筛选 API、AI API。
+      </p>
+      <div class="form-row">
+        <div class="form-group">
+          <label>代理地址</label>
+          <input v-model="proxyHost" placeholder="127.0.0.1" />
+        </div>
+        <div class="form-group">
+          <label>端口</label>
+          <input v-model="proxyPort" placeholder="24000" />
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary btn-sm" @click="saveProxy(true)">启用并保存</button>
+        <button v-if="proxyEnabled" class="btn btn-sm" @click="saveProxy(false)">停用代理</button>
+      </div>
+      <div v-if="proxyMsg" class="action-msg" :class="proxyOk ? 'msg-ok' : 'msg-fail'">{{ proxyMsg }}</div>
+    </div>
+
     <!-- AI Configuration -->
     <div class="card section">
       <div class="section-header">
@@ -185,6 +213,12 @@ const chartshotCookieInput = ref('')
 const chartshotMsg = ref('')
 const chartshotOk = ref(false)
 
+const proxyEnabled = ref(false)
+const proxyHost = ref('127.0.0.1')
+const proxyPort = ref('24000')
+const proxyMsg = ref('')
+const proxyOk = ref(false)
+
 function formatVolume(v) {
   if (!v) return '0'
   if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M'
@@ -264,6 +298,34 @@ async function testChartshotCookies() {
   } catch (e) {
     chartshotMsg.value = '测试失败: ' + e.message
     chartshotOk.value = false
+  }
+}
+
+async function loadProxy() {
+  try {
+    const res = await api.getProxy()
+    proxyEnabled.value = res.enabled || false
+    proxyHost.value = res.host || '127.0.0.1'
+    proxyPort.value = res.port || '24000'
+  } catch {}
+}
+
+async function saveProxy(enabled) {
+  proxyMsg.value = ''
+  try {
+    const res = await api.updateProxy({ enabled, host: proxyHost.value, port: proxyPort.value })
+    if (res.ok) {
+      proxyMsg.value = enabled ? `代理已启用: ${res.host}:${res.port}` : '代理已停用'
+      proxyOk.value = true
+      proxyEnabled.value = enabled
+      await loadInfo()
+    } else {
+      proxyMsg.value = '保存失败'
+      proxyOk.value = false
+    }
+  } catch (e) {
+    proxyMsg.value = '保存失败: ' + e.message
+    proxyOk.value = false
   }
 }
 
@@ -360,6 +422,7 @@ onMounted(() => {
   loadInfo()
   loadPineCookies()
   loadChartshotStatus()
+  loadProxy()
   loadAIConfig()
   loadStrategies()
 })

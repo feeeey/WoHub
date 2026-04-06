@@ -1,6 +1,7 @@
 import json
 import httpx
 from ai.strategy import get_ai_config
+from config import settings
 
 
 class LLMClient:
@@ -19,6 +20,12 @@ class LLMClient:
             model=conf["model"],
             max_tokens=conf["max_tokens"],
         )
+
+    def _proxy(self):
+        if settings.proxy_enabled:
+            url = f"http://{settings.proxy_host}:{settings.proxy_port}"
+            return httpx.Proxy(url)
+        return None
 
     def _headers(self):
         return {
@@ -41,6 +48,7 @@ class LLMClient:
             headers=self._headers(),
             json=body,
             timeout=60,
+            proxy=self._proxy(),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -54,6 +62,7 @@ class LLMClient:
             headers=self._headers(),
             json=body,
             timeout=120,
+            proxy=self._proxy(),
         ) as resp:
             resp.raise_for_status()
             for line in resp.iter_lines():

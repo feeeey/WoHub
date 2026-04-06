@@ -134,6 +134,14 @@ export const api = {
     return request('/settings/cookies', { method: 'PUT', body: JSON.stringify({ cookies: raw }) })
   },
 
+  async getProxy() {
+    return request('/settings/proxy')
+  },
+
+  async updateProxy(data) {
+    return request('/settings/proxy', { method: 'PUT', body: JSON.stringify(data) })
+  },
+
   async getChartshotStatus() {
     return request('/settings/chartshot/status')
   },

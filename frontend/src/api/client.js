@@ -117,4 +117,8 @@ export const api = {
   async getScreeners() {
     return request('/tasks/screeners')
   },
+
+  async getWatchlists() {
+    return request('/tasks/watchlists')
+  },
 }

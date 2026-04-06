@@ -94,12 +94,13 @@
         </span>
       </div>
       <p class="section-desc">
-        代理用于访问被封锁的外部服务。生效范围：交易所 API（Binance/Bybit）、TradingView Pine 筛选 API、AI API。
+        HTTP 代理，用于访问被封锁的外部服务。生效范围：交易所 API（Binance/Bybit）、TradingView Pine 筛选 API、AI API。<br>
+        <strong>Docker 部署时</strong>，代理地址填 <code>host.docker.internal</code>（宿主机），不要填 127.0.0.1。
       </p>
       <div class="form-row">
         <div class="form-group">
           <label>代理地址</label>
-          <input v-model="proxyHost" placeholder="127.0.0.1" />
+          <input v-model="proxyHost" placeholder="host.docker.internal" />
         </div>
         <div class="form-group">
           <label>端口</label>
@@ -214,8 +215,8 @@ const chartshotMsg = ref('')
 const chartshotOk = ref(false)
 
 const proxyEnabled = ref(false)
-const proxyHost = ref('127.0.0.1')
-const proxyPort = ref('24000')
+const proxyHost = ref('host.docker.internal')
+const proxyPort = ref('10809')
 const proxyMsg = ref('')
 const proxyOk = ref(false)
 

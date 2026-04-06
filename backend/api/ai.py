@@ -216,3 +216,53 @@ def get_signal_detail(signal_id: int):
                       "created_at": analysis["created_at"]} if analysis else None,
         "history": [dict(h) for h in history],
     }
+
+
+@router.post("/analyze/{signal_id}")
+def analyze_signal(signal_id: int):
+    """Stream AI analysis for a signal via SSE."""
+    from ai.llm_client import LLMClient
+    from ai.context_builder import build_context
+
+    conf = get_ai_config()
+    if not conf["api_key"]:
+        raise HTTPException(400, "API Key not configured")
+
+    strategy = get_default_strategy()
+    context = build_context(signal_id)
+    if not context:
+        raise HTTPException(404, "Signal not found or no context available")
+
+    messages = [{"role": "system", "content": strategy["system_prompt"]}] + context
+
+    def generate():
+        full_text = []
+        try:
+            client = LLMClient.from_config()
+            for chunk in client.stream_chat(messages):
+                full_text.append(chunk)
+                yield f"data: {json.dumps({'text': chunk})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+        # Save completed analysis
+        analysis = "".join(full_text)
+        if analysis:
+            sentiment = "neutral"
+            lower = analysis.lower()
+            if any(w in lower for w in ["看涨", "偏多", "bullish", "上涨"]):
+                sentiment = "bullish"
+            elif any(w in lower for w in ["看跌", "偏空", "bearish", "下跌"]):
+                sentiment = "bearish"
+
+            db = get_db(settings.db_path)
+            db.execute(
+                "INSERT INTO ai_analyses (signal_id, strategy_id, analysis_text, sentiment) VALUES (?, ?, ?, ?)",
+                (signal_id, strategy["id"], analysis, sentiment),
+            )
+            db.commit()
+            db.close()
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")

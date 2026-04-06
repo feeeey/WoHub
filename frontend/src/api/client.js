@@ -44,4 +44,25 @@ export const api = {
   async health() {
     return request('/health')
   },
+
+  async fundingRates() {
+    return request('/market/funding-rates')
+  },
+
+  async gainers() {
+    return request('/market/gainers')
+  },
+
+  async losers() {
+    return request('/market/losers')
+  },
+
+  async compare(symbol) {
+    return request(`/market/compare/${encodeURIComponent(symbol)}`)
+  },
+
+  async exportList(exchange = 'all') {
+    const res = await fetch(`${BASE}/market/export?exchange=${exchange}`)
+    return res.text()
+  },
 }

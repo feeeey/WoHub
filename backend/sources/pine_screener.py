@@ -1,9 +1,18 @@
 import os
 import json
+import time
+import threading
 import requests
 from pathlib import Path
 from config import settings
 from app_logger import log as applog
+
+# Rate limiting: TradingView allows ~1 request per 2 seconds per session
+_last_request_time = 0
+_rate_lock = threading.Lock()
+_MIN_INTERVAL = 2.0  # seconds between requests
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = [3, 5, 8]
 
 SCREENERS_DIR = Path(__file__).resolve().parent.parent / "screeners"
 
@@ -128,16 +137,39 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
            f"run_screener: {folder_type}/{screener_name} res={resolution} watchlist={watchlist_id}",
            f"cookie_keys={list(cookies.keys())}, header_count={len(session.headers)}")
 
-    try:
-        resp = session.post(API_URL, data=request_data, cookies=cookies)
-        applog("pine_screener", "info",
-               f"Response: HTTP {resp.status_code}, {len(resp.text)} bytes",
-               f"response_headers={dict(resp.headers)}")
-        resp.raise_for_status()
-    except Exception as e:
-        applog("pine_screener", "error", f"Request failed: {e}",
-               f"url={API_URL}, status={getattr(resp, 'status_code', 'N/A') if 'resp' in dir() else 'N/A'}")
-        raise
+    # Rate limiting + retry
+    resp = None
+    for attempt in range(_MAX_RETRIES):
+        _wait_rate_limit()
+        try:
+            resp = session.post(API_URL, data=request_data, cookies=cookies)
+            applog("pine_screener", "info",
+                   f"Response: HTTP {resp.status_code}, {len(resp.text)} bytes",
+                   f"attempt={attempt + 1}")
+            resp.raise_for_status()
+
+            # Check for rate limit error in response body
+            if '"request_limit_reached"' in resp.text:
+                backoff = _RETRY_BACKOFF[attempt] if attempt < len(_RETRY_BACKOFF) else 10
+                applog("pine_screener", "warn",
+                       f"Rate limited, retry {attempt + 1}/{_MAX_RETRIES} after {backoff}s")
+                time.sleep(backoff)
+                continue
+
+            break  # Success
+        except Exception as e:
+            if attempt < _MAX_RETRIES - 1:
+                backoff = _RETRY_BACKOFF[attempt]
+                applog("pine_screener", "warn",
+                       f"Request failed, retry {attempt + 1}/{_MAX_RETRIES} after {backoff}s: {e}")
+                time.sleep(backoff)
+            else:
+                applog("pine_screener", "error", f"Request failed after {_MAX_RETRIES} retries: {e}")
+                raise
+
+    if resp is None or '"request_limit_reached"' in resp.text:
+        applog("pine_screener", "error", f"All retries exhausted (rate limited)")
+        return []
 
     symbols = []
     seen = set()
@@ -162,6 +194,19 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
     applog("pine_screener", "info", f"Result: {len(symbols)} symbols found",
            f"symbols={symbols[:10]}{'...' if len(symbols) > 10 else ''}")
     return symbols
+
+
+def _wait_rate_limit():
+    """Ensure minimum interval between API requests."""
+    global _last_request_time
+    with _rate_lock:
+        now = time.time()
+        elapsed = now - _last_request_time
+        if elapsed < _MIN_INTERVAL:
+            wait = _MIN_INTERVAL - elapsed
+            applog("pine_screener", "debug", f"Rate limit wait: {wait:.1f}s")
+            time.sleep(wait)
+        _last_request_time = time.time()
 
 
 def fetch_watchlists():

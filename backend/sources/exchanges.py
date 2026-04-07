@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from sources.http_client import cached
 from sources import binance, okx, bybit, bitget
+from app_logger import log as applog
 
 _EXCHANGES = [
     ("Binance", binance),
@@ -20,6 +21,7 @@ def _fetch_parallel(method_name: str):
                 fn = getattr(mod, method_name)
                 return fn(), None
             except Exception as e:
+                applog("exchange", "error", f"{name}.{method_name} failed: {e}")
                 return None, {"exchange": name, "error": str(e)}
 
         with ThreadPoolExecutor(max_workers=4) as pool:

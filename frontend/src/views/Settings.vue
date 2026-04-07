@@ -195,6 +195,40 @@
         </div>
       </div>
     </div>
+
+    <!-- System Logs -->
+    <div class="card section">
+      <div class="section-header">
+        <h3 class="section-title">系统日志</h3>
+        <div class="btn-row">
+          <select v-model="logSource" class="log-filter" @change="loadLogs">
+            <option value="">全部来源</option>
+            <option value="pine_screener">Pine筛选</option>
+            <option value="exchange">交易所</option>
+            <option value="executor">执行器</option>
+          </select>
+          <select v-model="logLevel" class="log-filter" @change="loadLogs">
+            <option value="">全部级别</option>
+            <option value="error">错误</option>
+            <option value="warn">警告</option>
+            <option value="info">信息</option>
+            <option value="debug">调试</option>
+          </select>
+          <button class="btn btn-sm" @click="loadLogs">刷新</button>
+          <button class="btn btn-sm" @click="clearAllLogs">清除</button>
+        </div>
+      </div>
+      <div class="log-panel">
+        <div v-if="!logs.length" class="history-empty">暂无日志</div>
+        <div v-for="(entry, i) in logs" :key="i" class="log-entry" :class="'log-' + entry.level">
+          <span class="log-ts">{{ entry.ts.substring(11) }}</span>
+          <span class="log-source">{{ entry.source }}</span>
+          <span class="log-level">{{ entry.level }}</span>
+          <span class="log-msg">{{ entry.message }}</span>
+          <div v-if="entry.detail" class="log-detail">{{ entry.detail }}</div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -419,6 +453,20 @@ async function deleteStrat(s) {
   await loadStrategies()
 }
 
+// Logs
+const logs = ref([])
+const logSource = ref('')
+const logLevel = ref('')
+
+async function loadLogs() {
+  try { logs.value = await api.getLogs(logSource.value || null, logLevel.value || null) } catch {}
+}
+
+async function clearAllLogs() {
+  await api.clearLogs()
+  logs.value = []
+}
+
 onMounted(() => {
   loadInfo()
   loadPineCookies()
@@ -426,6 +474,7 @@ onMounted(() => {
   loadProxy()
   loadAIConfig()
   loadStrategies()
+  loadLogs()
 })
 </script>
 
@@ -574,5 +623,74 @@ onMounted(() => {
   background: var(--bg-primary);
   border-radius: var(--radius-md);
   margin-bottom: 16px;
+}
+
+.log-filter {
+  max-width: 130px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.log-panel {
+  max-height: 400px;
+  overflow-y: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 12px;
+}
+
+.log-entry {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.log-entry:hover {
+  background: var(--bg-tertiary);
+}
+
+.log-ts {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.log-source {
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 90px;
+}
+
+.log-level {
+  font-weight: 600;
+  min-width: 40px;
+}
+
+.log-error .log-level { color: var(--danger); }
+.log-warn .log-level { color: var(--warning); }
+.log-info .log-level { color: var(--success); }
+.log-debug .log-level { color: var(--text-tertiary); }
+
+.log-msg {
+  flex: 1;
+  color: var(--text-primary);
+}
+
+.log-detail {
+  width: 100%;
+  padding: 4px 8px 4px 140px;
+  color: var(--text-secondary);
+  word-break: break-all;
+  font-size: 11px;
+}
+
+.history-empty {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-tertiary);
+  font-size: 13px;
 }
 </style>

@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter
 from config import settings
 from sources.chart_shot_client import chartshot_client
+from app_logger import get_logs, clear_logs
 
 router = APIRouter(prefix="/settings")
 
@@ -110,6 +111,17 @@ def get_info():
         "proxy_port": settings.proxy_port,
         "chartshot_url": settings.chartshot_url,
     }
+
+
+@router.get("/logs")
+def api_logs(source: str = None, level: str = None, limit: int = 100):
+    return get_logs(source=source, level=level, limit=limit)
+
+
+@router.delete("/logs")
+def api_clear_logs():
+    clear_logs()
+    return {"ok": True}
 
 
 @router.get("/proxy")

@@ -142,6 +142,17 @@ export const api = {
     return request('/settings/cookies', { method: 'PUT', body: JSON.stringify({ cookies: raw }) })
   },
 
+  async getLogs(source, level, limit = 100) {
+    let url = `/settings/logs?limit=${limit}`
+    if (source) url += `&source=${source}`
+    if (level) url += `&level=${level}`
+    return request(url)
+  },
+
+  async clearLogs() {
+    return request('/settings/logs', { method: 'DELETE' })
+  },
+
   async getProxy() {
     return request('/settings/proxy')
   },

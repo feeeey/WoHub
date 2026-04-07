@@ -3,6 +3,7 @@ import json
 import requests
 from pathlib import Path
 from config import settings
+from app_logger import log as applog
 
 SCREENERS_DIR = Path(__file__).resolve().parent.parent / "screeners"
 
@@ -121,12 +122,30 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
 
     session = _get_session()
     cookies = _load_cookies()
-    resp = session.post(API_URL, data=json.dumps(config), cookies=cookies)
-    resp.raise_for_status()
+    request_data = json.dumps(config)
+
+    applog("pine_screener", "info",
+           f"run_screener: {folder_type}/{screener_name} res={resolution} watchlist={watchlist_id}",
+           f"cookie_keys={list(cookies.keys())}, header_count={len(session.headers)}")
+
+    try:
+        resp = session.post(API_URL, data=request_data, cookies=cookies)
+        applog("pine_screener", "info",
+               f"Response: HTTP {resp.status_code}, {len(resp.text)} bytes",
+               f"response_headers={dict(resp.headers)}")
+        resp.raise_for_status()
+    except Exception as e:
+        applog("pine_screener", "error", f"Request failed: {e}",
+               f"url={API_URL}, status={getattr(resp, 'status_code', 'N/A') if 'resp' in dir() else 'N/A'}")
+        raise
 
     symbols = []
     seen = set()
-    for line in resp.text.strip().split("\n"):
+    raw_lines = resp.text.strip().split("\n")
+    applog("pine_screener", "debug", f"Response lines: {len(raw_lines)}",
+           f"first_100_chars={resp.text[:100]}")
+
+    for line in raw_lines:
         if not line.strip():
             continue
         try:
@@ -137,7 +156,11 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
                     seen.add(s)
                     symbols.append(s)
         except json.JSONDecodeError:
+            applog("pine_screener", "warn", f"Failed to parse line", f"line={line[:200]}")
             continue
+
+    applog("pine_screener", "info", f"Result: {len(symbols)} symbols found",
+           f"symbols={symbols[:10]}{'...' if len(symbols) > 10 else ''}")
     return symbols
 
 

@@ -110,6 +110,36 @@ def delete_channel(channel_id: int):
     return {"ok": True}
 
 
+@router.get("/{channel_id}/history")
+def channel_history(channel_id: int, limit: int = 50):
+    db = get_db(settings.db_path)
+    row = db.execute("SELECT * FROM channels WHERE id = ?", (channel_id,)).fetchone()
+    if not row:
+        db.close()
+        raise HTTPException(404, "Channel not found")
+
+    logs = db.execute("""
+        SELECT p.*, t.name as task_name
+        FROM push_logs p
+        LEFT JOIN tasks t ON t.id = p.task_id
+        WHERE p.channel_id = ?
+        ORDER BY p.pushed_at DESC LIMIT ?
+    """, (channel_id, limit)).fetchall()
+    db.close()
+
+    return [
+        {
+            "id": r["id"],
+            "task_name": r["task_name"] or "-",
+            "content": (r["content_text"] or "")[:200],
+            "status": r["status"],
+            "error": r["error_message"],
+            "pushed_at": r["pushed_at"],
+        }
+        for r in logs
+    ]
+
+
 @router.post("/{channel_id}/test")
 def test_push(channel_id: int):
     db = get_db(settings.db_path)

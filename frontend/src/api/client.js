@@ -86,6 +86,10 @@ export const api = {
     return request(`/channels/${id}/test`, { method: 'POST' })
   },
 
+  async getChannelHistory(id) {
+    return request(`/channels/${id}/history`)
+  },
+
   async listTasks() {
     return request('/tasks')
   },

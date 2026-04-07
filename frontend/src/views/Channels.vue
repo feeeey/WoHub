@@ -79,6 +79,38 @@
       <div v-if="ch.testResult" class="test-result" :class="ch.testResult.ok ? 'test-ok' : 'test-fail'">
         {{ ch.testResult.ok ? '连接成功: ' + (ch.testResult.bot_name || '') : '连接失败: ' + (ch.testResult.error || '') }}
       </div>
+
+      <div class="history-toggle" @click="toggleHistory(ch)">
+        {{ ch.showHistory ? '收起历史' : '推送历史' }}
+        <span v-if="ch.historyCount != null" class="history-count">{{ ch.historyCount }}</span>
+      </div>
+
+      <div v-if="ch.showHistory && ch.history" class="history-panel">
+        <div v-if="!ch.history.length" class="history-empty">暂无推送记录</div>
+        <table v-else class="history-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>关联任务</th>
+              <th>内容</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="log in ch.history" :key="log.id">
+              <td class="col-time">{{ formatTime(log.pushed_at) }}</td>
+              <td>{{ log.task_name }}</td>
+              <td class="col-content">{{ log.content }}</td>
+              <td>
+                <span class="badge" :class="log.status === 'success' ? 'badge-success' : 'badge-danger'">
+                  {{ log.status === 'success' ? '成功' : '失败' }}
+                </span>
+                <span v-if="log.error" class="error-text">{{ log.error }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </template>
@@ -103,6 +135,9 @@ async function loadChannels() {
       ...c,
       testing: false,
       testResult: null,
+      showHistory: false,
+      history: null,
+      historyCount: null,
     }))
   } catch (e) {
     console.error('Failed to load channels:', e)
@@ -169,6 +204,26 @@ async function testPush(ch) {
     ch.testResult = { ok: false, error: e.message }
   } finally {
     ch.testing = false
+  }
+}
+
+function formatTime(t) {
+  if (!t) return ''
+  return t.replace('T', ' ').substring(5, 16)
+}
+
+async function toggleHistory(ch) {
+  if (ch.showHistory) {
+    ch.showHistory = false
+    return
+  }
+  try {
+    ch.history = await api.getChannelHistory(ch.id)
+    ch.historyCount = ch.history.length
+    ch.showHistory = true
+  } catch {
+    ch.history = []
+    ch.showHistory = true
   }
 }
 
@@ -253,5 +308,68 @@ onMounted(loadChannels)
 .test-fail {
   background: var(--danger-subtle);
   color: var(--danger);
+}
+
+.history-toggle {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.history-toggle:hover { text-decoration: underline; }
+.history-count {
+  background: var(--bg-tertiary);
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.history-panel {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.history-table th {
+  text-align: left;
+  padding: 8px 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.history-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+.history-table .col-time {
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.history-table .col-content {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-empty {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+.error-text {
+  color: var(--danger);
+  font-size: 11px;
+  margin-left: 6px;
 }
 </style>

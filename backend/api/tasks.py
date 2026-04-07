@@ -181,6 +181,39 @@ def test_task(task_id: int):
         return {"ok": False, "error": str(e)}
 
 
+@router.get("/{task_id}/history")
+def task_history(task_id: int, limit: int = 50):
+    db = get_db(settings.db_path)
+    row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row:
+        db.close()
+        raise HTTPException(404, "Task not found")
+
+    signals = db.execute("""
+        SELECT s.*, snap.price, snap.change_24h, snap.funding_rate,
+               a.analysis_text, a.sentiment,
+               o.change_1h, o.change_4h, o.change_24h
+        FROM signals s
+        LEFT JOIN snapshots snap ON snap.signal_id = s.id
+        LEFT JOIN ai_analyses a ON a.signal_id = s.id
+        LEFT JOIN outcomes o ON o.signal_id = s.id
+        WHERE s.task_id = ?
+        ORDER BY s.triggered_at DESC LIMIT ?
+    """, (task_id, limit)).fetchall()
+
+    push_logs = db.execute("""
+        SELECT * FROM push_logs WHERE task_id = ?
+        ORDER BY pushed_at DESC LIMIT ?
+    """, (task_id, limit)).fetchall()
+
+    db.close()
+
+    return {
+        "signals": [dict(s) for s in signals],
+        "push_logs": [dict(p) for p in push_logs],
+    }
+
+
 def _start_job(row):
     schedule = row["schedule"]
     config = json.loads(row["config_json"])

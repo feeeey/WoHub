@@ -118,6 +118,10 @@ export const api = {
     return request('/tasks/screeners')
   },
 
+  async getTaskHistory(id) {
+    return request(`/tasks/${id}/history`)
+  },
+
   async getWatchlists() {
     return request('/tasks/watchlists')
   },

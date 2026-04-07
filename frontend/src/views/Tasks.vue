@@ -191,7 +191,13 @@
         </div>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">{{ editingId ? '保存修改' : '创建' }}</button>
+          <button type="button" class="btn" @click="saveAndTest" :disabled="formTesting">
+            {{ formTesting ? '测试中...' : '保存并测试' }}
+          </button>
           <button type="button" class="btn" @click="cancelForm">取消</button>
+        </div>
+        <div v-if="formTestResult" class="test-result" :class="formTestResult.ok ? 'test-ok' : 'test-fail'" style="margin-top: 12px">
+          {{ formTestResult.ok ? '测试执行成功' : '测试失败: ' + (formTestResult.error || '') }}
         </div>
       </form>
     </div>
@@ -231,6 +237,45 @@
       <div v-if="t.testResult" class="test-result" :class="t.testResult.ok ? 'test-ok' : 'test-fail'">
         {{ t.testResult.ok ? '执行成功' : '执行失败: ' + (t.testResult.error || '') }}
       </div>
+
+      <!-- History Toggle -->
+      <div class="history-toggle" @click="toggleHistory(t)">
+        {{ t.showHistory ? '收起历史' : '查看历史' }}
+        <span v-if="t.historyCount" class="history-count">{{ t.historyCount }}</span>
+      </div>
+
+      <!-- History Panel -->
+      <div v-if="t.showHistory && t.history" class="history-panel">
+        <div v-if="!t.history.signals.length" class="history-empty">暂无执行记录</div>
+        <table v-else class="history-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>币种</th>
+              <th>指标</th>
+              <th>周期</th>
+              <th>触发价</th>
+              <th>1h</th>
+              <th>4h</th>
+              <th>24h</th>
+              <th>AI</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="s in t.history.signals" :key="s.id">
+              <td class="col-time">{{ formatTime(s.triggered_at) }}</td>
+              <td class="col-symbol">{{ s.symbol }}</td>
+              <td>{{ s.indicator }}</td>
+              <td>{{ s.timeframe }}</td>
+              <td>{{ s.price ? Number(s.price).toFixed(2) : '-' }}</td>
+              <td :class="changeClass(s.change_1h)">{{ s.change_1h != null ? s.change_1h.toFixed(2) + '%' : '-' }}</td>
+              <td :class="changeClass(s.change_4h)">{{ s.change_4h != null ? s.change_4h.toFixed(2) + '%' : '-' }}</td>
+              <td :class="changeClass(s.change_24h)">{{ s.change_24h != null ? s.change_24h.toFixed(2) + '%' : '-' }}</td>
+              <td>{{ s.sentiment || '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </template>
@@ -246,6 +291,8 @@ const watchlists = ref({})
 const showCreate = ref(false)
 const editingId = ref(null)
 const symbolsInput = ref('')
+const formTesting = ref(false)
+const formTestResult = ref(null)
 const allResolutions = ['5m', '15m', '30m', '1h', '4h', '1d', '1w']
 
 const defaultConfigs = {
@@ -277,6 +324,7 @@ function onTypeChange() {
 
 function openCreate() {
   editingId.value = null
+  formTestResult.value = null
   form.value = {
     name: '', type: 'watchlist_signal', schedule: '1h',
     channel_id: null, actions: ['text_summary'],
@@ -310,7 +358,7 @@ function cancelForm() {
 }
 
 async function loadTasks() {
-  tasks.value = (await api.listTasks()).map(t => ({ ...t, testing: false, testResult: null }))
+  tasks.value = (await api.listTasks()).map(t => ({ ...t, testing: false, testResult: null, showHistory: false, history: null, historyCount: null }))
 }
 
 async function loadChannels() {
@@ -351,6 +399,56 @@ async function testRun(t) {
   try { t.testResult = await api.testTask(t.id) }
   catch (e) { t.testResult = { ok: false, error: e.message } }
   finally { t.testing = false }
+}
+
+async function saveAndTest() {
+  formTesting.value = true
+  formTestResult.value = null
+  try {
+    let taskId = editingId.value
+    const data = { ...form.value }
+    if (data.type === 'scheduled_shot') {
+      data.config.symbols = symbolsInput.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    }
+    if (taskId) {
+      await api.updateTask(taskId, data)
+    } else {
+      const created = await api.createTask(data)
+      taskId = created.id
+      editingId.value = taskId
+    }
+    formTestResult.value = await api.testTask(taskId)
+    await loadTasks()
+  } catch (e) {
+    formTestResult.value = { ok: false, error: e.message }
+  } finally {
+    formTesting.value = false
+  }
+}
+
+function formatTime(t) {
+  if (!t) return ''
+  return t.replace('T', ' ').substring(5, 16)
+}
+
+function changeClass(v) {
+  if (v == null) return ''
+  return v > 0 ? 'clr-positive' : v < 0 ? 'clr-negative' : ''
+}
+
+async function toggleHistory(t) {
+  if (t.showHistory) {
+    t.showHistory = false
+    return
+  }
+  try {
+    t.history = await api.getTaskHistory(t.id)
+    t.historyCount = t.history.signals.length
+    t.showHistory = true
+  } catch (e) {
+    t.history = { signals: [], push_logs: [] }
+    t.showHistory = true
+  }
 }
 
 async function removeTask(t) {
@@ -412,4 +510,58 @@ onMounted(() => {
 .test-result { margin-top: 12px; padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13px; }
 .test-ok { background: var(--success-subtle); color: var(--success); }
 .test-fail { background: var(--danger-subtle); color: var(--danger); }
+
+.history-toggle {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.history-toggle:hover { text-decoration: underline; }
+.history-count {
+  background: var(--bg-tertiary);
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.history-panel {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.history-table th {
+  text-align: left;
+  padding: 8px 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.history-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  white-space: nowrap;
+}
+.history-table .col-time { color: var(--text-tertiary); }
+.history-table .col-symbol { font-weight: 600; }
+.history-empty {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.clr-positive { color: var(--success); }
+.clr-negative { color: var(--danger); }
 </style>

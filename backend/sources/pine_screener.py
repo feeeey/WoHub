@@ -26,10 +26,30 @@ API_URL = "https://pine-screener.tradingview.com/pine_scanner_http/scan"
 
 _HEADERS = {
     "accept": "application/json",
+    "accept-language": "zh-CN,zh;q=0.9,ts;q=0.8",
+    "cache-control": "no-cache",
     "content-type": "text/plain;charset=UTF-8",
     "origin": "https://www.tradingview.com",
+    "pragma": "no-cache",
+    "priority": "u=1, i",
     "referer": "https://www.tradingview.com/",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "sec-ch-ua": '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-site",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+}
+
+_DEFAULT_COOKIES = {
+    "cookiePrivacyPreferenceBannerProduction": "notApplicable",
+    "_ga": "GA1.1.988197279.1751463257",
+    "cookiesSettings": '{"analytics":true,"advertising":true}',
+    "device_t": "TEJXbkFROjI.yyWBVaicBcv2-vz8MOi8BXPXha69djS99xuip1BAK_4",
+    "cachec": "undefined",
+    "etg": "undefined",
+    "theme": "light",
 }
 
 _session = None
@@ -53,11 +73,17 @@ def _get_session():
 
 
 def _load_cookies():
+    """Load cookies, merging saved values with defaults (matching original pine-screener behavior)."""
+    merged = dict(_DEFAULT_COOKIES)
     cookie_path = Path(settings.db_path).parent / "cookies.json"
     if cookie_path.exists():
-        with open(cookie_path) as f:
-            return json.load(f)
-    return {}
+        try:
+            with open(cookie_path) as f:
+                saved = json.load(f)
+            merged.update(saved)
+        except Exception:
+            pass
+    return merged
 
 
 def list_screeners():

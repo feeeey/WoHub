@@ -196,8 +196,28 @@
           </button>
           <button type="button" class="btn" @click="cancelForm">取消</button>
         </div>
-        <div v-if="formTestResult" class="test-result" :class="formTestResult.ok ? 'test-ok' : 'test-fail'" style="margin-top: 12px">
-          {{ formTestResult.ok ? '测试执行成功' : '测试失败: ' + (formTestResult.error || '') }}
+        <div v-if="formTestResult" style="margin-top: 12px">
+          <div class="test-result" :class="formTestResult.ok ? 'test-ok' : 'test-fail'">
+            {{ formTestResult.ok ? '测试执行成功' : '测试失败: ' + (formTestResult.error || '') }}
+          </div>
+          <div v-if="formTestResult.ok && formTestResult.detail" class="test-detail">
+            <div v-if="formTestResult.detail.results" class="test-detail-section">
+              <strong>筛选结果：</strong>
+              <span v-for="(r, i) in formTestResult.detail.results" :key="i">
+                {{ r.label }}({{ r.resolution }}): {{ r.count }}个
+                <span v-if="i < formTestResult.detail.results.length - 1"> | </span>
+              </span>
+            </div>
+            <div v-if="formTestResult.detail.total_signals != null" class="test-detail-section">
+              <strong>信号命中：</strong>{{ formTestResult.detail.total_signals }} 个标的
+            </div>
+            <div v-if="formTestResult.detail.signals && Object.keys(formTestResult.detail.signals).length" class="test-detail-section">
+              <div v-for="(labels, sym) in formTestResult.detail.signals" :key="sym" class="signal-item-mini">
+                {{ sym.replace('BINANCE:', '').replace('.P', '') }}
+                <span class="signal-labels">{{ labels.join(' · ') }}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </form>
     </div>
@@ -235,7 +255,7 @@
         </div>
       </div>
       <div v-if="t.testResult" class="test-result" :class="t.testResult.ok ? 'test-ok' : 'test-fail'">
-        {{ t.testResult.ok ? '执行成功' : '执行失败: ' + (t.testResult.error || '') }}
+        {{ t.testResult.ok ? '执行成功' + (t.testResult.detail?.total_signals != null ? ' — ' + t.testResult.detail.total_signals + ' 个信号' : '') : '执行失败: ' + (t.testResult.error || '') }}
       </div>
 
       <!-- History Toggle -->
@@ -564,4 +584,29 @@ onMounted(() => {
 
 .clr-positive { color: var(--success); }
 .clr-negative { color: var(--danger); }
+
+.test-detail {
+  margin-top: 8px;
+  padding: 12px 14px;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.6;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.test-detail-section {
+  margin-bottom: 8px;
+}
+.test-detail-section strong {
+  color: var(--text-secondary);
+}
+.signal-item-mini {
+  padding: 2px 0;
+  font-size: 12px;
+}
+.signal-item-mini .signal-labels {
+  color: var(--text-tertiary);
+  margin-left: 8px;
+}
 </style>

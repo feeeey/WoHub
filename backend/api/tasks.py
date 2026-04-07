@@ -8,7 +8,7 @@ from tasks.scheduler import (
     add_task_job, remove_task_job, is_task_running,
     get_shortest_resolution, SCHEDULE_DESC,
 )
-from tasks.executor import execute_task
+from tasks.executor import execute_task, get_last_result
 from sources.pine_screener import list_screeners
 
 router = APIRouter(prefix="/tasks")
@@ -176,7 +176,8 @@ def test_task(task_id: int):
         raise HTTPException(404, "Task not found")
     try:
         execute_task(task_id)
-        return {"ok": True}
+        result = get_last_result(task_id)
+        return {"ok": True, "detail": result}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

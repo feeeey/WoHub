@@ -6,6 +6,14 @@ from config import settings
 from sources.pine_screener import run_screener, build_cross_analysis
 from channels.sender import send_text, send_photo
 from sources.chart_shot_client import chartshot_client
+from app_logger import log as applog
+
+# Store last execution result for the test endpoint
+_last_results = {}
+
+
+def get_last_result(task_id):
+    return _last_results.get(task_id)
 
 
 def execute_task(task_id):
@@ -59,39 +67,61 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
                 symbols = run_screener(sc["folder_type"], sc["screener_name"], res, watchlist_id)
                 label = sc.get("label", sc["screener_name"])
                 all_results.append({"label": label, "resolution": res, "symbols": symbols, "count": len(symbols)})
+                applog("executor", "info", f"Screener {label} ({res}): {len(symbols)} symbols")
             except Exception as e:
-                print(f"[executor] Screener error: {e}")
+                applog("executor", "error", f"Screener error: {e}")
 
     if not all_results:
+        _last_results[task_id] = {"results": [], "signals": {}, "message": "无筛选结果"}
         return
 
     analysis = build_cross_analysis(all_results)
     overlaps = analysis.get("screener_overlap", {})
 
-    if not overlaps:
+    # For single-screener tasks, use all found symbols as signals (no overlap requirement)
+    if len(screeners) <= 1:
+        signals = {}
+        for r in all_results:
+            for sym in r["symbols"]:
+                signals.setdefault(sym, []).append(r["label"])
+    else:
+        signals = overlaps
+
+    # Store results for test endpoint
+    _last_results[task_id] = {
+        "results": [{"label": r["label"], "resolution": r["resolution"], "count": r["count"]} for r in all_results],
+        "signals": {sym: labels for sym, labels in list(signals.items())[:20]},
+        "total_signals": len(signals),
+        "message": "",
+    }
+
+    if not signals:
+        _last_results[task_id]["message"] = "无信号命中"
         return
 
+    # Build message
     lines = [f"🔔 信号触发 [{datetime.now(timezone.utc).strftime('%m-%d %H:%M')} UTC]"]
-    for sym, labels in sorted(overlaps.items(), key=lambda x: -len(x[1])):
+    for sym, labels in sorted(signals.items(), key=lambda x: -len(x[1]))[:50]:
         clean_sym = sym.replace("BINANCE:", "").replace(".P", "")
         lines.append(f"  {clean_sym} → {' · '.join(labels)}")
-    lines.append(f"\n共 {len(overlaps)} 个标的")
+    lines.append(f"\n共 {len(signals)} 个标的")
     message = "\n".join(lines)
+    _last_results[task_id]["message"] = message
 
     if "text_summary" in actions and channel:
         _send_push(channel, message)
         _log_push(task_id, channel, message)
 
     if "chart_shot" in actions and channel:
-        for sym in list(overlaps.keys())[:3]:
+        for sym in list(signals.keys())[:3]:
             clean = sym.replace("BINANCE:", "").replace(".P", "")
             _take_and_send_screenshot(task_id, clean, resolutions, channel)
 
-    _record_signals(task_id, overlaps, resolutions, all_results)
+    _record_signals(task_id, signals, resolutions, all_results)
 
     if "ai_analysis" in actions:
         import threading
-        t = threading.Thread(target=_run_ai_and_edit, args=(task_id, overlaps, channel, message), daemon=True)
+        t = threading.Thread(target=_run_ai_and_edit, args=(task_id, signals, channel, message), daemon=True)
         t.start()
 
 

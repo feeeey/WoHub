@@ -82,8 +82,9 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
     if len(screeners) <= 1:
         signals = {}
         for r in all_results:
+            tag = f"{r['label']}({r['resolution']})"
             for sym in r["symbols"]:
-                signals.setdefault(sym, []).append(r["label"])
+                signals.setdefault(sym, []).append(tag)
     else:
         signals = overlaps
 

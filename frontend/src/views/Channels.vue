@@ -22,7 +22,7 @@
             <label>类型</label>
             <select v-model="form.type" :disabled="!!editing">
               <option value="telegram">Telegram</option>
-              <option value="discord" disabled>Discord (即将支持)</option>
+              <option value="discord">Discord</option>
               <option value="webhook" disabled>Webhook (即将支持)</option>
             </select>
           </div>
@@ -36,6 +36,17 @@
           <div class="form-group">
             <label>Chat ID</label>
             <input v-model="form.config.chat_id" placeholder="群组或用户 ID" required />
+          </div>
+        </div>
+
+        <div v-if="form.type === 'discord'">
+          <div class="form-group">
+            <label>Bot Token</label>
+            <input v-model="form.config.bot_token" placeholder="从 Discord Developer Portal 获取" required />
+          </div>
+          <div class="form-group">
+            <label>频道 ID</label>
+            <input v-model="form.config.channel_id" placeholder="右键频道 → 复制频道 ID" required />
           </div>
         </div>
 
@@ -77,7 +88,7 @@
         </div>
       </div>
       <div v-if="ch.testResult" class="test-result" :class="ch.testResult.ok ? 'test-ok' : 'test-fail'">
-        {{ ch.testResult.ok ? '连接成功: ' + (ch.testResult.bot_name || '') : '连接失败: ' + (ch.testResult.error || '') }}
+        {{ ch.testResult.ok ? '连接成功: ' + (ch.testResult.bot_name || '') + (ch.testResult.channel_name ? ' → #' + ch.testResult.channel_name : '') : '连接失败: ' + (ch.testResult.error || '') }}
       </div>
 
       <div class="history-toggle" @click="toggleHistory(ch)">
@@ -116,7 +127,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { api } from '../api/client.js'
 
 const channels = ref([])
@@ -127,6 +138,18 @@ const form = ref({
   name: '',
   type: 'telegram',
   config: { bot_token: '', chat_id: '' },
+})
+
+const configDefaults = {
+  telegram: { bot_token: '', chat_id: '' },
+  discord: { bot_token: '', channel_id: '' },
+  webhook: {},
+}
+
+watch(() => form.value.type, (t) => {
+  if (!editing.value) {
+    form.value.config = { ...configDefaults[t] }
+  }
 })
 
 async function loadChannels() {

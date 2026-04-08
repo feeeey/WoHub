@@ -1,5 +1,6 @@
 import json
 from channels.telegram import TelegramChannel
+from channels.discord import DiscordChannel
 
 
 def create_channel(channel_type: str, config: dict):
@@ -7,6 +8,11 @@ def create_channel(channel_type: str, config: dict):
         return TelegramChannel(
             bot_token=config.get("bot_token", ""),
             chat_id=config.get("chat_id", ""),
+        )
+    if channel_type == "discord":
+        return DiscordChannel(
+            bot_token=config.get("bot_token", ""),
+            channel_id=config.get("channel_id", ""),
         )
     raise ValueError(f"Unsupported channel type: {channel_type}")
 

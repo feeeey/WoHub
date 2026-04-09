@@ -202,6 +202,7 @@
           </button>
           <button type="button" class="btn" @click="cancelForm">取消</button>
         </div>
+        <p v-if="formError" class="form-error">{{ formError }}</p>
         <div v-if="formTestResult" style="margin-top: 12px">
           <div class="test-result" :class="formTestResult.ok ? 'test-ok' : 'test-fail'">
             {{ formTestResult.ok ? '测试执行成功' : '测试失败: ' + (formTestResult.error || '') }}
@@ -260,6 +261,43 @@
           <button class="btn btn-sm" style="color: var(--danger)" @click="removeTask(t)">删除</button>
         </div>
       </div>
+
+      <!-- Task Config Summary (collapsible) -->
+      <div class="config-toggle" @click="t.showConfig = !t.showConfig">
+        <span class="config-summary">
+          <span v-if="t.config?.screeners?.length" class="config-tag">{{ t.config.screeners.map(s => s.label).join(' · ') }}</span>
+          <span v-if="t.config?.resolutions?.length" class="config-tag">{{ t.config.resolutions.join(' ') }}</span>
+          <span v-if="t.config?.overlap_threshold && t.config.screeners?.length > 1" class="config-tag">≥{{ t.config.overlap_threshold }}叠加</span>
+        </span>
+        <span class="config-arrow">{{ t.showConfig ? '▾' : '▸' }}</span>
+      </div>
+      <div v-if="t.showConfig" class="config-detail">
+        <div v-if="t.config?.watchlist_id" class="config-line">
+          <span class="config-label">关注列表</span>
+          <span>{{ watchlistName(t.config.watchlist_id) }}</span>
+        </div>
+        <div v-if="t.config?.screeners?.length" class="config-line">
+          <span class="config-label">指标</span>
+          <span>{{ t.config.screeners.map(s => s.label).join('、') }}</span>
+        </div>
+        <div v-if="t.config?.resolutions?.length" class="config-line">
+          <span class="config-label">周期</span>
+          <span>{{ t.config.resolutions.join('、') }}</span>
+        </div>
+        <div v-if="t.config?.overlap_threshold && t.config.screeners?.length > 1" class="config-line">
+          <span class="config-label">触发信号数</span>
+          <span>≥{{ t.config.overlap_threshold }} 个指标叠加</span>
+        </div>
+        <div v-if="t.channel_id" class="config-line">
+          <span class="config-label">推送通道</span>
+          <span>{{ channelName(t.channel_id) }}</span>
+        </div>
+        <div class="config-line">
+          <span class="config-label">动作</span>
+          <span>{{ (t.actions || []).map(a => a === 'text_summary' ? '文字' : a === 'chart_shot' ? '截图' : a).join('、') }}</span>
+        </div>
+      </div>
+
       <div v-if="t.testResult" class="test-result" :class="t.testResult.ok ? 'test-ok' : 'test-fail'">
         {{ t.testResult.ok ? '执行成功' + (t.testResult.detail?.total_signals != null ? ' — ' + t.testResult.detail.total_signals + ' 个信号' : '') : '执行失败: ' + (t.testResult.error || '') }}
       </div>
@@ -343,6 +381,18 @@ const TYPE_LABELS = {
 
 function typeLabel(t) { return TYPE_LABELS[t] || t }
 
+function watchlistName(id) {
+  for (const [name, wid] of Object.entries(watchlists.value)) {
+    if (wid === id) return name
+  }
+  return `ID:${id}`
+}
+
+function channelName(id) {
+  const ch = channels.value.find(c => c.id === id)
+  return ch ? ch.name : `ID:${id}`
+}
+
 function onTypeChange() {
   form.value.config = { ...defaultConfigs[form.value.type] }
   symbolsInput.value = ''
@@ -384,7 +434,7 @@ function cancelForm() {
 }
 
 async function loadTasks() {
-  tasks.value = (await api.listTasks()).map(t => ({ ...t, testing: false, testResult: null, showHistory: false, history: null, historyCount: null }))
+  tasks.value = (await api.listTasks()).map(t => ({ ...t, testing: false, testResult: null, showConfig: false, showHistory: false, history: null, historyCount: null }))
 }
 
 async function loadChannels() {
@@ -402,19 +452,26 @@ async function loadWatchlists() {
   } catch {}
 }
 
+const formError = ref('')
+
 async function handleCreate() {
+  formError.value = ''
   const data = { ...form.value }
   if (data.type === 'scheduled_shot') {
     data.config.symbols = symbolsInput.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
   }
-  if (editingId.value) {
-    await api.updateTask(editingId.value, data)
-  } else {
-    await api.createTask(data)
+  try {
+    if (editingId.value) {
+      await api.updateTask(editingId.value, data)
+    } else {
+      await api.createTask(data)
+    }
+    showCreate.value = false
+    editingId.value = null
+    await loadTasks()
+  } catch (e) {
+    formError.value = '保存失败: ' + e.message
   }
-  showCreate.value = false
-  editingId.value = null
-  await loadTasks()
 }
 
 async function startTask(t) { await api.startTask(t.id); await loadTasks() }
@@ -526,6 +583,7 @@ onMounted(() => {
   accent-color: var(--accent);
 }
 
+.form-error { color: var(--danger); font-size: 13px; margin-top: 12px; }
 .task-card { margin-bottom: 12px; }
 .task-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .task-info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -533,6 +591,45 @@ onMounted(() => {
 .task-type { color: var(--text-tertiary); font-size: 13px; }
 .task-schedule { color: var(--text-tertiary); font-size: 12px; }
 .task-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.config-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 6px 12px;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+}
+.config-toggle:hover { background: var(--bg-secondary); }
+.config-summary { display: flex; gap: 8px; flex-wrap: wrap; }
+.config-tag {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.config-arrow {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.config-detail {
+  padding: 10px 14px;
+  background: var(--bg-primary);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  font-size: 13px;
+}
+.config-line {
+  display: flex;
+  gap: 12px;
+  padding: 3px 0;
+}
+.config-label {
+  color: var(--text-tertiary);
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
 .test-result { margin-top: 12px; padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13px; }
 .test-ok { background: var(--success-subtle); color: var(--success); }
 .test-fail { background: var(--danger-subtle); color: var(--danger); }

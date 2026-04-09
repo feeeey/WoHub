@@ -59,7 +59,10 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
     watchlist_id = config.get("watchlist_id", 0)
     screeners = config.get("screeners", [])
     resolutions = config.get("resolutions", ["1h"])
+    overlap_threshold = config.get("overlap_threshold", 2)
+    is_single = len(screeners) <= 1
 
+    # Run all screener×timeframe combos sequentially (TradingView API: no concurrency)
     all_results = []
     for res in resolutions:
         for sc in screeners:
@@ -75,37 +78,61 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
         _last_results[task_id] = {"results": [], "signals": {}, "message": "无筛选结果"}
         return
 
-    analysis = build_cross_analysis(all_results)
-    overlaps = analysis.get("screener_overlap", {})
+    # Build signals per timeframe independently
+    # Timeframes are independent runs; overlap is computed across screeners within each timeframe
+    signals_by_res = {}  # {res: {sym: [label, ...]}}
+    for res in resolutions:
+        res_results = [r for r in all_results if r["resolution"] == res]
+        if is_single:
+            # Single screener: all symbols are signals
+            per_res = {}
+            for r in res_results:
+                for sym in r["symbols"]:
+                    per_res.setdefault(sym, []).append(r["label"])
+            signals_by_res[res] = per_res
+        else:
+            # Multi screener: count how many different screeners hit each symbol
+            sym_screeners = {}
+            for r in res_results:
+                for sym in r["symbols"]:
+                    sym_screeners.setdefault(sym, []).append(r["label"])
+            signals_by_res[res] = {
+                sym: labels for sym, labels in sym_screeners.items()
+                if len(labels) >= overlap_threshold
+            }
 
-    # For single-screener tasks, use all found symbols as signals (no overlap requirement)
-    if len(screeners) <= 1:
-        signals = {}
-        for r in all_results:
-            tag = f"{r['label']}({r['resolution']})"
-            for sym in r["symbols"]:
-                signals.setdefault(sym, []).append(tag)
-    else:
-        signals = overlaps
+    # Merge all timeframes into flat signal dict for recording/screenshots
+    all_signals = {}  # {sym: [label(res), ...]}
+    for res, sigs in signals_by_res.items():
+        for sym, labels in sigs.items():
+            tags = [f"{l}({res})" for l in labels] if not is_single else [f"{labels[0]}({res})"]
+            all_signals.setdefault(sym, []).extend(tags)
 
     # Store results for test endpoint
     _last_results[task_id] = {
         "results": [{"label": r["label"], "resolution": r["resolution"], "count": r["count"]} for r in all_results],
-        "signals": {sym: labels for sym, labels in list(signals.items())[:20]},
-        "total_signals": len(signals),
+        "signals": {sym: labels for sym, labels in list(all_signals.items())[:20]},
+        "total_signals": len(all_signals),
         "message": "",
     }
 
-    if not signals:
+    if not all_signals:
         _last_results[task_id]["message"] = "无信号命中"
         return
 
-    # Build message
-    lines = [f"🔔 信号触发 [{datetime.now(timezone.utc).strftime('%m-%d %H:%M')} UTC]"]
-    for sym, labels in sorted(signals.items(), key=lambda x: -len(x[1]))[:50]:
-        clean_sym = sym.replace("BINANCE:", "").replace(".P", "")
-        lines.append(f"  {clean_sym} → {' · '.join(labels)}")
-    lines.append(f"\n共 {len(signals)} 个标的")
+    # Build message grouped by timeframe
+    ts = datetime.now(timezone.utc).strftime('%m-%d %H:%M')
+    lines = [f"🔔 信号触发 [{ts} UTC]"]
+    for res in resolutions:
+        sigs = signals_by_res.get(res, {})
+        if not sigs:
+            continue
+        lines.append(f"\n📊 {res}:")
+        for sym, labels in sorted(sigs.items(), key=lambda x: -len(x[1]))[:30]:
+            clean_sym = sym.replace("BINANCE:", "").replace(".P", "")
+            lines.append(f"  {clean_sym} → {' · '.join(labels)}")
+        lines.append(f"  共 {len(sigs)} 个标的")
+    lines.append(f"\n合计 {len(all_signals)} 个标的")
     message = "\n".join(lines)
     _last_results[task_id]["message"] = message
 
@@ -114,15 +141,15 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
         _log_push(task_id, channel, message)
 
     if "chart_shot" in actions and channel:
-        for sym in list(signals.keys())[:3]:
+        for sym in list(all_signals.keys())[:3]:
             clean = sym.replace("BINANCE:", "").replace(".P", "")
             _take_and_send_screenshot(task_id, clean, resolutions, channel)
 
-    _record_signals(task_id, signals, resolutions, all_results)
+    _record_signals(task_id, all_signals, resolutions, all_results)
 
     if "ai_analysis" in actions:
         import threading
-        t = threading.Thread(target=_run_ai_and_edit, args=(task_id, signals, channel, message), daemon=True)
+        t = threading.Thread(target=_run_ai_and_edit, args=(task_id, all_signals, channel, message), daemon=True)
         t.start()
 
 

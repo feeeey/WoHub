@@ -56,6 +56,12 @@
               </label>
             </div>
           </div>
+          <div v-if="form.config.screeners && form.config.screeners.length > 1" class="form-row">
+            <div class="form-group">
+              <label>触发信号数（同一标的需被 ≥N 个指标命中）</label>
+              <input type="number" v-model.number="form.config.overlap_threshold" min="2" :max="form.config.screeners.length" />
+            </div>
+          </div>
         </div>
 
         <!-- market_scan config -->
@@ -316,7 +322,7 @@ const formTestResult = ref(null)
 const allResolutions = ['5m', '15m', '30m', '1h', '4h', '1d', '1w']
 
 const defaultConfigs = {
-  watchlist_signal: { watchlist_id: 0, screeners: [], resolutions: ['1h'] },
+  watchlist_signal: { watchlist_id: 0, screeners: [], resolutions: ['1h'], overlap_threshold: 2 },
   market_scan: { watchlist_id: 0, screeners: [], resolutions: ['1h'], overlap_threshold: 2, screenshot_threshold: 3 },
   anomaly_watch: { monitor_type: 'price_change', threshold: 10, screeners: [], resolutions: ['1h'], watchlist_id: 0 },
   scheduled_shot: { symbols: [], timeframes: ['1h'] },

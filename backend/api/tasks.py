@@ -89,42 +89,52 @@ def create_task(body: TaskCreate):
 
 @router.put("/{task_id}")
 def update_task(task_id: int, body: TaskUpdate):
-    db = get_db(settings.db_path)
-    row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    if not row:
+    try:
+        db = get_db(settings.db_path)
+        row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not row:
+            db.close()
+            raise HTTPException(404, "Task not found")
+
+        updates, params = [], []
+        if body.name is not None:
+            updates.append("name = ?"); params.append(body.name)
+        if body.config is not None:
+            updates.append("config_json = ?"); params.append(json.dumps(body.config))
+        if body.actions is not None:
+            updates.append("actions_json = ?"); params.append(json.dumps(body.actions))
+        if body.schedule is not None:
+            updates.append("schedule = ?"); params.append(body.schedule)
+        if body.channel_id is not None:
+            updates.append("channel_id = ?"); params.append(body.channel_id)
+        if body.enabled is not None:
+            updates.append("enabled = ?"); params.append(int(body.enabled))
+
+        if updates:
+            updates.append("updated_at = datetime('now')")
+            params.append(task_id)
+            db.execute(f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?", params)
+            db.commit()
+
+        row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         db.close()
-        raise HTTPException(404, "Task not found")
 
-    updates, params = [], []
-    if body.name is not None:
-        updates.append("name = ?"); params.append(body.name)
-    if body.config is not None:
-        updates.append("config_json = ?"); params.append(json.dumps(body.config))
-    if body.actions is not None:
-        updates.append("actions_json = ?"); params.append(json.dumps(body.actions))
-    if body.schedule is not None:
-        updates.append("schedule = ?"); params.append(body.schedule)
-    if body.channel_id is not None:
-        updates.append("channel_id = ?"); params.append(body.channel_id)
-    if body.enabled is not None:
-        updates.append("enabled = ?"); params.append(int(body.enabled))
+        try:
+            if body.enabled is not None or body.schedule is not None:
+                if bool(row["enabled"]):
+                    _start_job(row)
+                else:
+                    remove_task_job(task_id)
+        except Exception as e:
+            print(f"[tasks] Reschedule failed: {e}")
 
-    if updates:
-        updates.append("updated_at = datetime('now')")
-        params.append(task_id)
-        db.execute(f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?", params)
-        db.commit()
-
-    row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    db.close()
-
-    if body.enabled is not None or body.schedule is not None:
-        if bool(row["enabled"]):
-            _start_job(row)
-        else:
-            remove_task_job(task_id)
-
-    return _row_to_dict(row)
+        return _row_to_dict(row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, detail=f"Update failed: {e}")
 
 
 @router.delete("/{task_id}")

@@ -161,6 +161,7 @@ def delete_task(task_id: int):
         db.execute(f"DELETE FROM outcomes WHERE signal_id IN ({placeholders})", signal_ids)
         db.execute(f"DELETE FROM snapshots WHERE signal_id IN ({placeholders})", signal_ids)
         db.execute(f"DELETE FROM ai_analyses WHERE signal_id IN ({placeholders})", signal_ids)
+        db.execute(f"DELETE FROM screenshots WHERE signal_id IN ({placeholders})", signal_ids)
         db.execute(f"DELETE FROM signals WHERE task_id = ?", (task_id,))
     db.execute("DELETE FROM push_logs WHERE task_id = ?", (task_id,))
     db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
@@ -180,7 +181,10 @@ def start_task(task_id: int):
     db.commit()
     row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     db.close()
-    _start_job(row)
+    try:
+        _start_job(row)
+    except Exception as e:
+        print(f"[tasks] start_job failed: {e}")
     return _row_to_dict(row)
 
 
@@ -193,7 +197,10 @@ def stop_task(task_id: int):
         raise HTTPException(404, "Task not found")
     db.execute("UPDATE tasks SET enabled = 0 WHERE id = ?", (task_id,))
     db.commit()
-    remove_task_job(task_id)
+    try:
+        remove_task_job(task_id)
+    except Exception as e:
+        print(f"[tasks] remove_job failed: {e}")
     row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     db.close()
     return _row_to_dict(row)

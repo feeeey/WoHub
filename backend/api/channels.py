@@ -104,6 +104,9 @@ def update_channel(channel_id: int, body: ChannelUpdate):
 @router.delete("/{channel_id}")
 def delete_channel(channel_id: int):
     db = get_db(settings.db_path)
+    # Clear FK references before deleting channel
+    db.execute("DELETE FROM push_logs WHERE channel_id = ?", (channel_id,))
+    db.execute("UPDATE tasks SET channel_id = NULL WHERE channel_id = ?", (channel_id,))
     db.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
     db.commit()
     db.close()
@@ -148,6 +151,8 @@ def test_push(channel_id: int):
     if not row:
         raise HTTPException(404, "Channel not found")
 
-    config = json.loads(row["config_json"])
-    result = test_channel(row["type"], config)
-    return result
+    try:
+        config = json.loads(row["config_json"])
+        return test_channel(row["type"], config)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

@@ -1,36 +1,24 @@
 <template>
   <div>
     <div class="page-header">
-      <h1>任务管理</h1>
-      <p>创建和管理信号监控任务</p>
+      <h1>定时任务</h1>
+      <p>筛选器的定时执行版本，命中信号自动推送</p>
     </div>
 
     <button class="btn btn-primary" @click="openCreate" style="margin-bottom: 24px">
       创建任务
     </button>
 
-    <!-- Create Form -->
+    <!-- Create/Edit Form -->
     <div v-if="showCreate" class="card" style="margin-bottom: 24px">
       <h3 style="margin-bottom: 16px">{{ editingId ? '编辑任务' : '创建任务' }}</h3>
       <form @submit.prevent="handleCreate">
-        <div class="form-row">
-          <div class="form-group">
-            <label>任务名称</label>
-            <input v-model="form.name" placeholder="例如：BTC 信号监控" required />
-          </div>
-          <div class="form-group">
-            <label>任务类型</label>
-            <select v-model="form.type" @change="onTypeChange">
-              <option value="watchlist_signal">关注列表信号监控</option>
-              <option value="market_scan">全市场叠加扫描</option>
-              <option value="anomaly_watch">异常行情监控</option>
-              <option value="scheduled_shot">定时截图</option>
-            </select>
-          </div>
+        <div class="form-group">
+          <label>任务名称</label>
+          <input v-model="form.name" placeholder="例如：BTC 超卖信号监控" required />
         </div>
 
-        <!-- watchlist_signal config -->
-        <div v-if="form.type === 'watchlist_signal'" class="config-section">
+        <div class="config-section">
           <div class="form-group">
             <label>关注列表</label>
             <select v-model="form.config.watchlist_id">
@@ -56,113 +44,12 @@
               </label>
             </div>
           </div>
-          <div v-if="form.config.screeners && form.config.screeners.length > 1" class="form-row">
-            <div class="form-group">
-              <label>触发信号数（同一标的需被 ≥N 个指标命中）</label>
-              <input type="number" v-model.number="form.config.overlap_threshold" min="2" :max="form.config.screeners.length" />
-            </div>
+          <div v-if="form.config.screeners && form.config.screeners.length > 1" class="form-group">
+            <label>触发信号数（同一标的需被 ≥N 个指标命中）</label>
+            <input type="number" v-model.number="form.config.overlap_threshold" min="2" :max="form.config.screeners.length" style="max-width: 120px" />
           </div>
         </div>
 
-        <!-- market_scan config -->
-        <div v-if="form.type === 'market_scan'" class="config-section">
-          <div class="form-group">
-            <label>关注列表（扫描范围）</label>
-            <select v-model="form.config.watchlist_id">
-              <option :value="0">请选择</option>
-              <option v-for="(id, name) in watchlists" :key="id" :value="id">{{ name }}</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>指标组合（多选）</label>
-            <div class="checkbox-grid">
-              <label v-for="s in screeners" :key="s.screener_name" class="checkbox-item">
-                <input type="checkbox" :value="s" v-model="form.config.screeners" />
-                {{ s.label }}
-              </label>
-            </div>
-          </div>
-          <div class="form-group">
-            <label>时间周期（多选）</label>
-            <div class="checkbox-grid">
-              <label v-for="r in allResolutions" :key="r" class="checkbox-item">
-                <input type="checkbox" :value="r" v-model="form.config.resolutions" />
-                {{ r }}
-              </label>
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>叠加阈值（≥N个指标命中）</label>
-              <input type="number" v-model.number="form.config.overlap_threshold" min="2" max="10" />
-            </div>
-            <div class="form-group">
-              <label>截图阈值（≥N个信号截图）</label>
-              <input type="number" v-model.number="form.config.screenshot_threshold" min="2" max="10" />
-            </div>
-          </div>
-        </div>
-
-        <!-- anomaly_watch config -->
-        <div v-if="form.type === 'anomaly_watch'" class="config-section">
-          <div class="form-row">
-            <div class="form-group">
-              <label>监控类型</label>
-              <select v-model="form.config.monitor_type">
-                <option value="price_change">涨跌幅</option>
-                <option value="funding_rate">资金费率</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>异常阈值（{{ form.config.monitor_type === 'price_change' ? '%' : '费率万分位' }}）</label>
-              <input type="number" v-model.number="form.config.threshold" step="0.1" />
-            </div>
-          </div>
-          <div class="form-group">
-            <label>联动检查指标（异常出现后自动跑以下指标）</label>
-            <div class="checkbox-grid">
-              <label v-for="s in screeners" :key="s.screener_name" class="checkbox-item">
-                <input type="checkbox" :value="s" v-model="form.config.screeners" />
-                {{ s.label }}
-              </label>
-            </div>
-          </div>
-          <div class="form-group">
-            <label>关注列表（联动检查范围）</label>
-            <select v-model="form.config.watchlist_id">
-              <option :value="0">全市场</option>
-              <option v-for="(id, name) in watchlists" :key="id" :value="id">{{ name }}</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>时间周期</label>
-            <div class="checkbox-grid">
-              <label v-for="r in allResolutions" :key="r" class="checkbox-item">
-                <input type="checkbox" :value="r" v-model="form.config.resolutions" />
-                {{ r }}
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <!-- scheduled_shot config -->
-        <div v-if="form.type === 'scheduled_shot'" class="config-section">
-          <div class="form-group">
-            <label>标的列表（逗号分隔）</label>
-            <input v-model="symbolsInput" placeholder="BTC, ETH, SOL" />
-          </div>
-          <div class="form-group">
-            <label>截图周期</label>
-            <div class="checkbox-grid">
-              <label v-for="r in allResolutions" :key="r" class="checkbox-item">
-                <input type="checkbox" :value="r" v-model="form.config.timeframes" />
-                {{ r }}
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <!-- Common fields -->
         <div class="form-row" style="margin-top: 16px">
           <div class="form-group">
             <label>调度周期</label>
@@ -184,6 +71,7 @@
             </select>
           </div>
         </div>
+
         <div class="form-group">
           <label>动作</label>
           <div class="checkbox-grid">
@@ -195,6 +83,7 @@
             </label>
           </div>
         </div>
+
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">{{ editingId ? '保存修改' : '创建' }}</button>
           <button type="button" class="btn" @click="saveAndTest" :disabled="formTesting">
@@ -220,7 +109,7 @@
             </div>
             <div v-if="formTestResult.detail.signals && Object.keys(formTestResult.detail.signals).length" class="test-detail-section">
               <div v-for="(labels, sym) in formTestResult.detail.signals" :key="sym" class="signal-item-mini">
-                {{ sym.replace('BINANCE:', '').replace('.P', '') }}
+                {{ cleanSymbol(sym) }}
                 <span class="signal-labels">{{ labels.join(' · ') }}</span>
               </div>
             </div>
@@ -229,7 +118,7 @@
       </form>
     </div>
 
-    <!-- Task List -->
+    <!-- Empty State -->
     <div v-if="tasks.length === 0 && !showCreate" class="empty-state card">
       <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <rect x="3" y="3" width="7" height="7" rx="1.5" />
@@ -238,9 +127,10 @@
         <rect x="14" y="14" width="7" height="7" rx="1.5" />
       </svg>
       <h3>暂无任务</h3>
-      <p>创建你的第一个监控任务，开始追踪信号。</p>
+      <p>创建你的第一个定时筛选任务，开始自动追踪信号。</p>
     </div>
 
+    <!-- Task List -->
     <div v-for="t in tasks" :key="t.id" class="card task-card">
       <div class="task-header">
         <div class="task-info">
@@ -248,7 +138,6 @@
           <span class="badge" :class="t.running ? 'badge-success' : 'badge-danger'">
             {{ t.running ? '运行中' : '已停止' }}
           </span>
-          <span class="task-type">{{ typeLabel(t.type) }}</span>
           <span class="task-schedule">{{ t.schedule_desc }}</span>
         </div>
         <div class="task-actions">
@@ -262,14 +151,14 @@
         </div>
       </div>
 
-      <!-- Task Config Summary (collapsible) -->
+      <!-- Config Summary -->
       <div class="config-toggle" @click="t.showConfig = !t.showConfig">
         <span class="config-summary">
           <span v-if="t.config?.screeners?.length" class="config-tag">{{ t.config.screeners.map(s => s.label).join(' · ') }}</span>
           <span v-if="t.config?.resolutions?.length" class="config-tag">{{ t.config.resolutions.join(' ') }}</span>
-          <span v-if="t.config?.overlap_threshold && t.config.screeners?.length > 1" class="config-tag">≥{{ t.config.overlap_threshold }}叠加</span>
+          <span v-if="t.config?.overlap_threshold && t.config.screeners?.length > 1" class="config-tag">&ge;{{ t.config.overlap_threshold }}叠加</span>
         </span>
-        <span class="config-arrow">{{ t.showConfig ? '▾' : '▸' }}</span>
+        <span class="config-arrow">{{ t.showConfig ? '&#9662;' : '&#9656;' }}</span>
       </div>
       <div v-if="t.showConfig" class="config-detail">
         <div v-if="t.config?.watchlist_id" class="config-line">
@@ -278,15 +167,15 @@
         </div>
         <div v-if="t.config?.screeners?.length" class="config-line">
           <span class="config-label">指标</span>
-          <span>{{ t.config.screeners.map(s => s.label).join('、') }}</span>
+          <span>{{ t.config.screeners.map(s => s.label).join(', ') }}</span>
         </div>
         <div v-if="t.config?.resolutions?.length" class="config-line">
           <span class="config-label">周期</span>
-          <span>{{ t.config.resolutions.join('、') }}</span>
+          <span>{{ t.config.resolutions.join(', ') }}</span>
         </div>
         <div v-if="t.config?.overlap_threshold && t.config.screeners?.length > 1" class="config-line">
           <span class="config-label">触发信号数</span>
-          <span>≥{{ t.config.overlap_threshold }} 个指标叠加</span>
+          <span>&ge;{{ t.config.overlap_threshold }} 个指标叠加</span>
         </div>
         <div v-if="t.channel_id" class="config-line">
           <span class="config-label">推送通道</span>
@@ -294,21 +183,19 @@
         </div>
         <div class="config-line">
           <span class="config-label">动作</span>
-          <span>{{ (t.actions || []).map(a => a === 'text_summary' ? '文字' : a === 'chart_shot' ? '截图' : a).join('、') }}</span>
+          <span>{{ (t.actions || []).map(a => a === 'text_summary' ? '文字' : a === 'chart_shot' ? '截图' : a).join(', ') }}</span>
         </div>
       </div>
 
       <div v-if="t.testResult" class="test-result" :class="t.testResult.ok ? 'test-ok' : 'test-fail'">
-        {{ t.testResult.ok ? '执行成功' + (t.testResult.detail?.total_signals != null ? ' — ' + t.testResult.detail.total_signals + ' 个信号' : '') : '执行失败: ' + (t.testResult.error || '') }}
+        {{ t.testResult.ok ? '执行成功' + (t.testResult.detail?.total_signals != null ? ' -- ' + t.testResult.detail.total_signals + ' 个信号' : '') : '执行失败: ' + (t.testResult.error || '') }}
       </div>
 
-      <!-- History Toggle -->
+      <!-- History -->
       <div class="history-toggle" @click="toggleHistory(t)">
         {{ t.showHistory ? '收起历史' : '查看历史' }}
         <span v-if="t.historyCount" class="history-count">{{ t.historyCount }}</span>
       </div>
-
-      <!-- History Panel -->
       <div v-if="t.showHistory && t.history" class="history-panel">
         <div v-if="!t.history.signals.length" class="history-empty">暂无执行记录</div>
         <table v-else class="history-table">
@@ -322,7 +209,6 @@
               <th>1h</th>
               <th>4h</th>
               <th>24h</th>
-              <th>AI</th>
             </tr>
           </thead>
           <tbody>
@@ -335,7 +221,6 @@
               <td :class="changeClass(s.change_1h)">{{ s.change_1h != null ? s.change_1h.toFixed(2) + '%' : '-' }}</td>
               <td :class="changeClass(s.change_4h)">{{ s.change_4h != null ? s.change_4h.toFixed(2) + '%' : '-' }}</td>
               <td :class="changeClass(s.change_24h)">{{ s.change_24h != null ? s.change_24h.toFixed(2) + '%' : '-' }}</td>
-              <td>{{ s.sentiment || '-' }}</td>
             </tr>
           </tbody>
         </table>
@@ -345,7 +230,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { api } from '../api/client.js'
 
 const tasks = ref([])
@@ -354,32 +239,22 @@ const screeners = ref([])
 const watchlists = ref({})
 const showCreate = ref(false)
 const editingId = ref(null)
-const symbolsInput = ref('')
 const formTesting = ref(false)
 const formTestResult = ref(null)
+const formError = ref('')
 const allResolutions = ['5m', '15m', '30m', '1h', '4h', '1d', '1w']
 
-const defaultConfigs = {
-  watchlist_signal: { watchlist_id: 0, screeners: [], resolutions: ['1h'], overlap_threshold: 2 },
-  market_scan: { watchlist_id: 0, screeners: [], resolutions: ['1h'], overlap_threshold: 2, screenshot_threshold: 3 },
-  anomaly_watch: { monitor_type: 'price_change', threshold: 10, screeners: [], resolutions: ['1h'], watchlist_id: 0 },
-  scheduled_shot: { symbols: [], timeframes: ['1h'] },
-}
+const defaultConfig = { watchlist_id: 0, screeners: [], resolutions: ['1h'], overlap_threshold: 2 }
 
 const form = ref({
   name: '', type: 'watchlist_signal', schedule: '1h',
   channel_id: null, actions: ['text_summary'],
-  config: { ...defaultConfigs.watchlist_signal },
+  config: { ...defaultConfig },
 })
 
-const TYPE_LABELS = {
-  watchlist_signal: '关注列表信号',
-  market_scan: '全市场扫描',
-  anomaly_watch: '异常行情',
-  scheduled_shot: '定时截图',
+function cleanSymbol(sym) {
+  return sym.replace('BINANCE:', '').replace('.P', '')
 }
-
-function typeLabel(t) { return TYPE_LABELS[t] || t }
 
 function watchlistName(id) {
   for (const [name, wid] of Object.entries(watchlists.value)) {
@@ -393,37 +268,29 @@ function channelName(id) {
   return ch ? ch.name : `ID:${id}`
 }
 
-function onTypeChange() {
-  form.value.config = { ...defaultConfigs[form.value.type] }
-  symbolsInput.value = ''
-}
-
 function openCreate() {
   editingId.value = null
   formTestResult.value = null
+  formError.value = ''
   form.value = {
     name: '', type: 'watchlist_signal', schedule: '1h',
     channel_id: null, actions: ['text_summary'],
-    config: { ...defaultConfigs.watchlist_signal },
+    config: { ...defaultConfig },
   }
-  symbolsInput.value = ''
   showCreate.value = true
 }
 
 function editTask(t) {
   editingId.value = t.id
+  formTestResult.value = null
+  formError.value = ''
   form.value = {
     name: t.name,
-    type: t.type,
+    type: t.type || 'watchlist_signal',
     schedule: t.schedule,
     channel_id: t.channel_id,
     actions: [...(t.actions || [])],
-    config: JSON.parse(JSON.stringify(t.config || {})),
-  }
-  if (t.type === 'scheduled_shot' && t.config?.symbols) {
-    symbolsInput.value = t.config.symbols.join(', ')
-  } else {
-    symbolsInput.value = ''
+    config: JSON.parse(JSON.stringify(t.config || defaultConfig)),
   }
   showCreate.value = true
 }
@@ -434,32 +301,16 @@ function cancelForm() {
 }
 
 async function loadTasks() {
-  tasks.value = (await api.listTasks()).map(t => ({ ...t, testing: false, testResult: null, showConfig: false, showHistory: false, history: null, historyCount: null }))
+  tasks.value = (await api.listTasks()).map(t => ({
+    ...t, testing: false, testResult: null, showConfig: false,
+    showHistory: false, history: null, historyCount: null,
+  }))
 }
-
-async function loadChannels() {
-  try { channels.value = await api.listChannels() } catch {}
-}
-
-async function loadScreeners() {
-  try { screeners.value = await api.getScreeners() } catch {}
-}
-
-async function loadWatchlists() {
-  try {
-    const res = await api.getWatchlists()
-    if (res.ok) watchlists.value = res.watchlists
-  } catch {}
-}
-
-const formError = ref('')
 
 async function handleCreate() {
   formError.value = ''
   const data = { ...form.value }
-  if (data.type === 'scheduled_shot') {
-    data.config.symbols = symbolsInput.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-  }
+  data.type = 'watchlist_signal'
   try {
     if (editingId.value) {
       await api.updateTask(editingId.value, data)
@@ -487,12 +338,11 @@ async function testRun(t) {
 async function saveAndTest() {
   formTesting.value = true
   formTestResult.value = null
+  formError.value = ''
   try {
     let taskId = editingId.value
     const data = { ...form.value }
-    if (data.type === 'scheduled_shot') {
-      data.config.symbols = symbolsInput.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-    }
+    data.type = 'watchlist_signal'
     if (taskId) {
       await api.updateTask(taskId, data)
     } else {
@@ -520,15 +370,12 @@ function changeClass(v) {
 }
 
 async function toggleHistory(t) {
-  if (t.showHistory) {
-    t.showHistory = false
-    return
-  }
+  if (t.showHistory) { t.showHistory = false; return }
   try {
     t.history = await api.getTaskHistory(t.id)
     t.historyCount = t.history.signals.length
     t.showHistory = true
-  } catch (e) {
+  } catch {
     t.history = { signals: [], push_logs: [] }
     t.showHistory = true
   }
@@ -542,9 +389,11 @@ async function removeTask(t) {
 
 onMounted(() => {
   loadTasks()
-  loadChannels()
-  loadScreeners()
-  loadWatchlists()
+  Promise.all([
+    api.listChannels().then(r => channels.value = r).catch(() => {}),
+    api.getScreeners().then(r => screeners.value = r).catch(() => {}),
+    api.getWatchlists().then(r => { if (r.ok) watchlists.value = r.watchlists }).catch(() => {}),
+  ])
 })
 </script>
 
@@ -553,6 +402,7 @@ onMounted(() => {
 .form-group { margin-bottom: 16px; }
 .form-group label { display: block; margin-bottom: 6px; color: var(--text-secondary); font-size: 13px; font-weight: 600; }
 .form-actions { display: flex; gap: 12px; margin-top: 8px; }
+.form-error { color: var(--danger); font-size: 13px; margin-top: 12px; }
 
 .config-section {
   padding: 20px;
@@ -561,155 +411,73 @@ onMounted(() => {
   margin-bottom: 16px;
 }
 
-.checkbox-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
+.checkbox-grid { display: flex; flex-wrap: wrap; gap: 12px; }
 .checkbox-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 14px;
-  color: var(--text-primary);
-  cursor: pointer;
-  font-weight: 400 !important;
-  margin-bottom: 0 !important;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 14px; color: var(--text-primary); cursor: pointer; font-weight: 400 !important; margin-bottom: 0 !important;
 }
+.checkbox-item input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
-.checkbox-item input[type="checkbox"] {
-  width: auto;
-  accent-color: var(--accent);
-}
-
-.form-error { color: var(--danger); font-size: 13px; margin-top: 12px; }
 .task-card { margin-bottom: 12px; }
 .task-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .task-info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .task-name { font-weight: 600; font-size: 15px; }
-.task-type { color: var(--text-tertiary); font-size: 13px; }
 .task-schedule { color: var(--text-tertiary); font-size: 12px; }
 .task-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
 .config-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 10px;
-  padding: 6px 12px;
-  background: var(--bg-primary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 13px;
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 10px; padding: 6px 12px;
+  background: var(--bg-primary); border-radius: var(--radius-sm);
+  cursor: pointer; font-size: 13px;
 }
 .config-toggle:hover { background: var(--bg-secondary); }
 .config-summary { display: flex; gap: 8px; flex-wrap: wrap; }
-.config-tag {
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.config-arrow {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  flex-shrink: 0;
-}
+.config-tag { color: var(--text-secondary); font-size: 12px; }
+.config-arrow { color: var(--text-tertiary); font-size: 11px; flex-shrink: 0; }
 .config-detail {
-  padding: 10px 14px;
-  background: var(--bg-primary);
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-  font-size: 13px;
+  padding: 10px 14px; background: var(--bg-primary);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm); font-size: 13px;
 }
-.config-line {
-  display: flex;
-  gap: 12px;
-  padding: 3px 0;
-}
-.config-label {
-  color: var(--text-tertiary);
-  min-width: 70px;
-  flex-shrink: 0;
-}
+.config-line { display: flex; gap: 12px; padding: 3px 0; }
+.config-label { color: var(--text-tertiary); min-width: 70px; flex-shrink: 0; }
 
 .test-result { margin-top: 12px; padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13px; }
 .test-ok { background: var(--success-subtle); color: var(--success); }
 .test-fail { background: var(--danger-subtle); color: var(--danger); }
 
 .history-toggle {
-  margin-top: 12px;
-  font-size: 13px;
-  color: var(--accent);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  margin-top: 12px; font-size: 13px; color: var(--accent);
+  cursor: pointer; display: flex; align-items: center; gap: 6px;
 }
 .history-toggle:hover { text-decoration: underline; }
 .history-count {
-  background: var(--bg-tertiary);
-  padding: 1px 7px;
-  border-radius: 10px;
-  font-size: 11px;
-  color: var(--text-secondary);
+  background: var(--bg-tertiary); padding: 1px 7px; border-radius: 10px;
+  font-size: 11px; color: var(--text-secondary);
 }
-
-.history-panel {
-  margin-top: 12px;
-  overflow-x: auto;
-}
-
-.history-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
+.history-panel { margin-top: 12px; overflow-x: auto; }
+.history-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .history-table th {
-  text-align: left;
-  padding: 8px 10px;
-  color: var(--text-secondary);
-  font-weight: 600;
-  font-size: 11px;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
+  text-align: left; padding: 8px 10px; color: var(--text-secondary);
+  font-weight: 600; font-size: 11px; border-bottom: 1px solid var(--border); white-space: nowrap;
 }
 .history-table td {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
-  white-space: nowrap;
+  padding: 6px 10px; border-bottom: 1px solid var(--border-subtle, var(--border)); white-space: nowrap;
 }
 .history-table .col-time { color: var(--text-tertiary); }
 .history-table .col-symbol { font-weight: 600; }
-.history-empty {
-  text-align: center;
-  padding: 20px;
-  color: var(--text-tertiary);
-  font-size: 13px;
-}
+.history-empty { text-align: center; padding: 20px; color: var(--text-tertiary); font-size: 13px; }
 
 .clr-positive { color: var(--success); }
 .clr-negative { color: var(--danger); }
 
 .test-detail {
-  margin-top: 8px;
-  padding: 12px 14px;
-  background: var(--bg-primary);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  line-height: 1.6;
-  max-height: 300px;
-  overflow-y: auto;
+  margin-top: 8px; padding: 12px 14px; background: var(--bg-primary);
+  border-radius: var(--radius-sm); font-size: 13px; line-height: 1.6;
+  max-height: 300px; overflow-y: auto;
 }
-.test-detail-section {
-  margin-bottom: 8px;
-}
-.test-detail-section strong {
-  color: var(--text-secondary);
-}
-.signal-item-mini {
-  padding: 2px 0;
-  font-size: 12px;
-}
-.signal-item-mini .signal-labels {
-  color: var(--text-tertiary);
-  margin-left: 8px;
-}
+.test-detail-section { margin-bottom: 8px; }
+.test-detail-section strong { color: var(--text-secondary); }
+.signal-item-mini { padding: 2px 0; font-size: 12px; }
+.signal-item-mini .signal-labels { color: var(--text-tertiary); margin-left: 8px; }
 </style>

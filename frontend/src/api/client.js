@@ -135,6 +135,10 @@ export const api = {
     return request('/tasks/watchlists')
   },
 
+  async runScan(data) {
+    return request('/scanner/run', { method: 'POST', body: JSON.stringify(data) })
+  },
+
   async getSettings() {
     return request('/settings/info')
   },

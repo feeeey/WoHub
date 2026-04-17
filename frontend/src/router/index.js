@@ -5,11 +5,13 @@ import Market from '../views/Market.vue'
 import Channels from '../views/Channels.vue'
 import Settings from '../views/Settings.vue'
 import AI from '../views/AI.vue'
+import Scanner from '../views/Scanner.vue'
 
 const routes = [
   { path: '/login', component: Login, meta: { public: true } },
   { path: '/', redirect: '/tasks' },
   { path: '/tasks', component: Tasks },
+  { path: '/scanner', component: Scanner },
   { path: '/market', component: Market },
   { path: '/channels', component: Channels },
   { path: '/settings', component: Settings },

@@ -30,7 +30,13 @@ RESOLUTION_PRIORITY = ["5m", "15m", "30m", "1h", "4h", "1d", "1w"]
 def get_scheduler():
     global _scheduler
     if _scheduler is None:
-        _scheduler = BackgroundScheduler(timezone="UTC")
+        # max_workers=1: tasks execute sequentially, avoiding DB lock contention
+        # and respecting TradingView's single-request-at-a-time constraint
+        _scheduler = BackgroundScheduler(
+            timezone="UTC",
+            executors={"default": {"type": "threadpool", "max_workers": 1}},
+            job_defaults={"coalesce": True, "max_instances": 1},
+        )
         _scheduler.start()
     return _scheduler
 

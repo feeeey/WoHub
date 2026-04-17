@@ -340,7 +340,9 @@ def _record_signals(task_id, overlaps, resolutions, all_results):
     try:
         from tasks.tracker import record_snapshot, schedule_outcome_tracking
 
+        # Phase 1: Insert all signals in one transaction
         db = get_db(settings.db_path)
+        pending = []  # (signal_id, symbol, exchange)
         for sym, labels in overlaps.items():
             clean = sym.replace("BINANCE:", "").replace(".P", "")
             exchange = "Binance"
@@ -355,13 +357,15 @@ def _record_signals(task_id, overlaps, resolutions, all_results):
                         "INSERT INTO signals (task_id, symbol, exchange, indicator, timeframe) VALUES (?, ?, ?, ?, ?)",
                         (task_id, clean, exchange, label, res),
                     )
-                    signal_id = cursor.lastrowid
-
-                    # Record snapshot and schedule outcome tracking
-                    record_snapshot(signal_id, clean, exchange)
-                    schedule_outcome_tracking(signal_id, clean, exchange)
+                    pending.append((cursor.lastrowid, clean, exchange))
 
         db.commit()
         db.close()
+
+        # Phase 2: Record snapshots after commit (separate DB connections)
+        for signal_id, clean, exchange in pending:
+            record_snapshot(signal_id, clean, exchange)
+            schedule_outcome_tracking(signal_id, clean, exchange)
+
     except Exception as e:
         print(f"[executor] Failed to record signals: {e}")

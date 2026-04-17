@@ -144,9 +144,16 @@ def delete_task(task_id: int):
     except Exception as e:
         print(f"[tasks] remove_task_job failed: {e}")
     db = get_db(settings.db_path)
-    db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    db.execute("DELETE FROM signals WHERE task_id = ?", (task_id,))
+    # Delete in FK order: children first, then parent
+    signal_ids = [r["id"] for r in db.execute("SELECT id FROM signals WHERE task_id = ?", (task_id,)).fetchall()]
+    if signal_ids:
+        placeholders = ",".join("?" * len(signal_ids))
+        db.execute(f"DELETE FROM outcomes WHERE signal_id IN ({placeholders})", signal_ids)
+        db.execute(f"DELETE FROM snapshots WHERE signal_id IN ({placeholders})", signal_ids)
+        db.execute(f"DELETE FROM ai_analyses WHERE signal_id IN ({placeholders})", signal_ids)
+        db.execute(f"DELETE FROM signals WHERE task_id = ?", (task_id,))
     db.execute("DELETE FROM push_logs WHERE task_id = ?", (task_id,))
+    db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     db.commit()
     db.close()
     return {"ok": True}

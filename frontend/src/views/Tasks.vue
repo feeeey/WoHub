@@ -383,8 +383,12 @@ async function toggleHistory(t) {
 
 async function removeTask(t) {
   if (!confirm(`确认删除任务 "${t.name}"？`)) return
-  await api.deleteTask(t.id)
-  await loadTasks()
+  try {
+    await api.deleteTask(t.id)
+    await loadTasks()
+  } catch (e) {
+    alert('删除失败: ' + e.message)
+  }
 }
 
 onMounted(() => {

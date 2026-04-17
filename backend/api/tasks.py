@@ -96,6 +96,10 @@ def update_task(task_id: int, body: TaskUpdate):
             db.close()
             raise HTTPException(404, "Task not found")
 
+        old_schedule = row["schedule"]
+        old_enabled = bool(row["enabled"])
+        old_config = row["config_json"]
+
         updates, params = [], []
         if body.name is not None:
             updates.append("name = ?"); params.append(body.name)
@@ -119,9 +123,15 @@ def update_task(task_id: int, body: TaskUpdate):
         row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         db.close()
 
+        # Only reschedule if enabled/schedule/config actually changed
+        new_enabled = bool(row["enabled"])
+        schedule_changed = (body.schedule is not None and body.schedule != old_schedule)
+        enabled_changed = (body.enabled is not None and new_enabled != old_enabled)
+        config_changed = (body.config is not None and json.dumps(body.config) != old_config)
+
         try:
-            if body.enabled is not None or body.schedule is not None:
-                if bool(row["enabled"]):
+            if enabled_changed or schedule_changed or config_changed:
+                if new_enabled:
                     _start_job(row)
                 else:
                     remove_task_job(task_id)

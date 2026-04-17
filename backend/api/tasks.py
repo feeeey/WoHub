@@ -139,9 +139,14 @@ def update_task(task_id: int, body: TaskUpdate):
 
 @router.delete("/{task_id}")
 def delete_task(task_id: int):
-    remove_task_job(task_id)
+    try:
+        remove_task_job(task_id)
+    except Exception as e:
+        print(f"[tasks] remove_task_job failed: {e}")
     db = get_db(settings.db_path)
     db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    db.execute("DELETE FROM signals WHERE task_id = ?", (task_id,))
+    db.execute("DELETE FROM push_logs WHERE task_id = ?", (task_id,))
     db.commit()
     db.close()
     return {"ok": True}

@@ -148,11 +148,12 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
                    f"attempt={attempt + 1}")
             resp.raise_for_status()
 
-            # Check for rate limit error in response body
-            if '"request_limit_reached"' in resp.text:
+            # Check for retryable errors in response body
+            if '"request_limit_reached"' in resp.text or '"internal_error"' in resp.text:
+                reason = "rate limited" if "request_limit_reached" in resp.text else "internal_error"
                 backoff = _RETRY_BACKOFF[attempt] if attempt < len(_RETRY_BACKOFF) else 10
                 applog("pine_screener", "warn",
-                       f"Rate limited, retry {attempt + 1}/{_MAX_RETRIES} after {backoff}s")
+                       f"TradingView {reason}, retry {attempt + 1}/{_MAX_RETRIES} after {backoff}s")
                 time.sleep(backoff)
                 continue
 
@@ -167,8 +168,8 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
                 applog("pine_screener", "error", f"Request failed after {_MAX_RETRIES} retries: {e}")
                 raise
 
-    if resp is None or '"request_limit_reached"' in resp.text:
-        applog("pine_screener", "error", f"All retries exhausted (rate limited)")
+    if resp is None or '"request_limit_reached"' in resp.text or '"internal_error"' in resp.text:
+        applog("pine_screener", "error", f"All retries exhausted ({resp.text[:100] if resp else 'no response'})")
         return []
 
     symbols = []

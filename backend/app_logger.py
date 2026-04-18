@@ -23,7 +23,7 @@ def log(source: str, level: str, message: str, detail: str = None):
         _logs.append(entry)
     # Also print for Docker logs
     tag = f"[{source}]"
-    print(f"{tag} {level.upper()}: {message}" + (f" | {detail[:200]}" if detail else ""))
+    print(f"{tag} {level.upper()}: {message}" + (f" | {detail[:500]}" if detail else ""))
 
 
 def get_logs(source: str = None, level: str = None, limit: int = 100):

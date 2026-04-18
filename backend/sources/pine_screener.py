@@ -133,9 +133,14 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
     cookies = _load_cookies()
     request_data = json.dumps(config)
 
+    # Log the actual request body for debugging
+    script_info = config.get("scripts", [{}])[0]
     applog("pine_screener", "info",
            f"run_screener: {folder_type}/{screener_name} res={resolution} watchlist={watchlist_id}",
            f"cookie_keys={list(cookies.keys())}, header_count={len(session.headers)}")
+    applog("pine_screener", "debug",
+           f"Request: script_id={script_info.get('id', '?')} resolution={script_info.get('resolution', '?')} watchlist={config.get('watchlist', '?')}",
+           f"body_size={len(request_data)}")
 
     # Rate limiting + retry
     resp = None
@@ -176,7 +181,7 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
     seen = set()
     raw_lines = resp.text.strip().split("\n")
     applog("pine_screener", "debug", f"Response lines: {len(raw_lines)}",
-           f"first_100_chars={resp.text[:100]}")
+           f"raw_response={resp.text[:500]}")
 
     for line in raw_lines:
         if not line.strip():

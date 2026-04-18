@@ -129,7 +129,7 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
     import random
     config["scripts"][0]["resolution"] = RESOLUTION_MAP[resolution]
     config["watchlist"] = watchlist_id
-    config["request_id"] = random.random()
+    config["request_id"] = str(random.random())
 
     session = _get_session()
     cookies = _load_cookies()

@@ -126,8 +126,10 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
     with open(config_path) as f:
         config = json.load(f)
 
+    import random
     config["scripts"][0]["resolution"] = RESOLUTION_MAP[resolution]
     config["watchlist"] = watchlist_id
+    config["request_id"] = random.random()
 
     session = _get_session()
     cookies = _load_cookies()

@@ -50,26 +50,12 @@
           </div>
         </div>
 
-        <div class="form-row" style="margin-top: 16px">
-          <div class="form-group">
-            <label>调度周期</label>
-            <select v-model="form.schedule">
-              <option value="5m">每5分钟</option>
-              <option value="15m">每15分钟</option>
-              <option value="30m">每30分钟</option>
-              <option value="1h">每小时</option>
-              <option value="4h">每4小时</option>
-              <option value="1d">每天</option>
-              <option value="1w">每周</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>推送通道</label>
-            <select v-model="form.channel_id">
-              <option :value="null">无</option>
-              <option v-for="ch in channels" :key="ch.id" :value="ch.id">{{ ch.name }}</option>
-            </select>
-          </div>
+        <div class="form-group" style="margin-top: 16px">
+          <label>推送通道</label>
+          <select v-model="form.channel_id">
+            <option :value="null">无</option>
+            <option v-for="ch in channels" :key="ch.id" :value="ch.id">{{ ch.name }}</option>
+          </select>
         </div>
 
         <div class="form-group">

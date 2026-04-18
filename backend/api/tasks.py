@@ -76,10 +76,13 @@ def list_tasks():
 def create_task(body: TaskCreate):
     if body.type not in VALID_TYPES:
         raise HTTPException(400, f"Invalid type: {body.type}")
+    # Auto-derive schedule from shortest resolution
+    resolutions = body.config.get("resolutions", ["1h"])
+    schedule = get_shortest_resolution(resolutions) if resolutions else (body.schedule or "1h")
     db = get_db(settings.db_path)
     cursor = db.execute(
         "INSERT INTO tasks (name, type, config_json, actions_json, channel_id, schedule) VALUES (?, ?, ?, ?, ?, ?)",
-        (body.name, body.type, json.dumps(body.config), json.dumps(body.actions), body.channel_id, body.schedule),
+        (body.name, body.type, json.dumps(body.config), json.dumps(body.actions), body.channel_id, schedule),
     )
     db.commit()
     row = db.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,)).fetchone()
@@ -255,11 +258,14 @@ def task_history(task_id: int, limit: int = 50):
 
 
 def _start_job(row):
-    schedule = row["schedule"]
     config = json.loads(row["config_json"])
-    resolutions = config.get("resolutions", [schedule])
-    if isinstance(resolutions, list) and len(resolutions) > 1:
-        schedule = get_shortest_resolution(resolutions)
+    resolutions = config.get("resolutions", ["1h"])
+    schedule = get_shortest_resolution(resolutions)
+    # Update schedule in DB so schedule_desc reflects reality
+    db = get_db(settings.db_path)
+    db.execute("UPDATE tasks SET schedule = ? WHERE id = ?", (schedule, row["id"]))
+    db.commit()
+    db.close()
     add_task_job(row["id"], execute_task, schedule)
 
 

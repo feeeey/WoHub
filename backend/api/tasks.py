@@ -5,7 +5,7 @@ from typing import Optional
 from database import get_db
 from config import settings
 from tasks.scheduler import (
-    add_task_job, remove_task_job, is_task_running,
+    add_task_jobs, remove_task_job, is_task_running,
     get_shortest_resolution, SCHEDULE_DESC,
 )
 from tasks.executor import execute_task, get_last_result
@@ -35,17 +35,24 @@ class TaskUpdate(BaseModel):
 
 
 def _row_to_dict(row):
+    config = json.loads(row["config_json"])
+    resolutions = config.get("resolutions", [])
+    # Each resolution runs on its own cron; show them all
+    if resolutions:
+        schedule_desc = "、".join(SCHEDULE_DESC.get(r, r) for r in resolutions)
+    else:
+        schedule_desc = SCHEDULE_DESC.get(row["schedule"], row["schedule"])
     return {
         "id": row["id"],
         "name": row["name"],
         "type": row["type"],
-        "config": json.loads(row["config_json"]),
+        "config": config,
         "actions": json.loads(row["actions_json"]),
         "channel_id": row["channel_id"],
         "schedule": row["schedule"],
         "enabled": bool(row["enabled"]),
         "running": is_task_running(row["id"]),
-        "schedule_desc": SCHEDULE_DESC.get(row["schedule"], row["schedule"]),
+        "schedule_desc": schedule_desc,
         "created_at": row["created_at"],
     }
 
@@ -260,13 +267,14 @@ def task_history(task_id: int, limit: int = 50):
 def _start_job(row):
     config = json.loads(row["config_json"])
     resolutions = config.get("resolutions", ["1h"])
+    # Keep schedule column as the shortest resolution for display purposes
     schedule = get_shortest_resolution(resolutions)
-    # Update schedule in DB so schedule_desc reflects reality
     db = get_db(settings.db_path)
     db.execute("UPDATE tasks SET schedule = ? WHERE id = ?", (schedule, row["id"]))
     db.commit()
     db.close()
-    add_task_job(row["id"], execute_task, schedule)
+    # Register one cron job per resolution — each runs on its own schedule
+    add_task_jobs(row["id"], execute_task, resolutions)
 
 
 def start_all_enabled():

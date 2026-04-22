@@ -16,7 +16,10 @@ def get_last_result(task_id):
     return _last_results.get(task_id)
 
 
-def execute_task(task_id):
+def execute_task(task_id, resolution=None):
+    """Execute a task. If resolution is given, only run that timeframe
+    (used by per-resolution scheduled jobs). If None, run all configured
+    resolutions (used by manual test endpoint)."""
     db = get_db(settings.db_path)
     row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if not row:
@@ -37,6 +40,10 @@ def execute_task(task_id):
                 "config": json.loads(ch_row["config_json"]),
             }
     db.close()
+
+    # Scope to single resolution if provided (scheduled invocation)
+    if resolution is not None:
+        config = {**config, "resolutions": [resolution]}
 
     try:
         if task_type == "watchlist_signal":

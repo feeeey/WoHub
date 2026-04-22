@@ -48,38 +48,43 @@ def stop_scheduler():
         _scheduler = None
 
 
-def add_task_job(task_id, func, schedule_key):
+def add_task_jobs(task_id, func, resolutions):
+    """Register one cron job per resolution. Each fires on its own schedule."""
     scheduler = get_scheduler()
-    job_id = f"task_{task_id}"
-    try:
-        scheduler.remove_job(job_id)
-    except Exception:
-        pass
+    remove_task_job(task_id)  # clean up old jobs first
 
-    trigger = CRON_TRIGGERS.get(schedule_key)
-    if trigger:
-        scheduler.add_job(func, trigger, id=job_id, args=[task_id], replace_existing=True)
-    else:
-        try:
-            seconds = int(schedule_key)
-            scheduler.add_job(func, IntervalTrigger(seconds=seconds), id=job_id, args=[task_id], replace_existing=True)
-        except ValueError:
-            raise ValueError(f"Invalid schedule: {schedule_key}")
+    if not resolutions:
+        resolutions = ["1h"]
+
+    for res in resolutions:
+        job_id = f"task_{task_id}_{res}"
+        trigger = CRON_TRIGGERS.get(res)
+        if not trigger:
+            raise ValueError(f"Invalid resolution: {res}")
+        # func signature: func(task_id, resolution)
+        scheduler.add_job(func, trigger, id=job_id, args=[task_id, res], replace_existing=True)
 
 
 def remove_task_job(task_id):
+    """Remove all jobs for a task (across all resolutions)."""
     scheduler = get_scheduler()
-    job_id = f"task_{task_id}"
-    try:
-        scheduler.remove_job(job_id)
-    except Exception:
-        pass
+    prefix = f"task_{task_id}_"
+    for job in scheduler.get_jobs():
+        if job.id == f"task_{task_id}" or job.id.startswith(prefix):
+            try:
+                scheduler.remove_job(job.id)
+            except Exception:
+                pass
 
 
 def is_task_running(task_id):
+    """A task is running if any of its resolution jobs is registered."""
     scheduler = get_scheduler()
-    job_id = f"task_{task_id}"
-    return scheduler.get_job(job_id) is not None
+    prefix = f"task_{task_id}_"
+    for job in scheduler.get_jobs():
+        if job.id == f"task_{task_id}" or job.id.startswith(prefix):
+            return True
+    return False
 
 
 def get_shortest_resolution(resolutions):

@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from sources.chart_shot_client import ChartShotClient
+from screenshots.client import ChartShotClient
 
 
 @pytest.fixture
@@ -13,7 +13,7 @@ def test_health_check(csc):
     mock_resp.json.return_value = {"status": "ok", "service": "chartshot"}
     mock_resp.raise_for_status = MagicMock()
 
-    with patch("sources.chart_shot_client.requests.get", return_value=mock_resp):
+    with patch("screenshots.client.requests.get", return_value=mock_resp):
         result = csc.health()
         assert result["status"] == "ok"
 
@@ -27,7 +27,7 @@ def test_screenshot_success(csc):
     }
     mock_resp.raise_for_status = MagicMock()
 
-    with patch("sources.chart_shot_client.requests.post", return_value=mock_resp):
+    with patch("screenshots.client.requests.post", return_value=mock_resp):
         result = csc.screenshot("BTCUSDT", ["1h"])
         assert result["ok"] is True
         assert len(result["files"]) == 1
@@ -39,7 +39,7 @@ def test_screenshot_error(csc):
     mock_resp.status_code = 504
     mock_resp.raise_for_status.side_effect = Exception("504")
 
-    with patch("sources.chart_shot_client.requests.post", return_value=mock_resp):
+    with patch("screenshots.client.requests.post", return_value=mock_resp):
         result = csc.screenshot("BTCUSDT", ["1h"])
         assert result["ok"] is False
 

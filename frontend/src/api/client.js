@@ -171,19 +171,19 @@ export const api = {
   },
 
   async getChartshotStatus() {
-    return request('/settings/chartshot/status')
+    return request('/screenshots/status')
   },
 
   async getChartshotCookies() {
-    return request('/settings/chartshot/cookies')
+    return request('/screenshots/cookies')
   },
 
   async updateChartshotCookies(raw) {
-    return request('/settings/chartshot/cookies', { method: 'PUT', body: JSON.stringify({ cookies: raw }) })
+    return request('/screenshots/cookies', { method: 'PUT', body: JSON.stringify({ cookies: raw }) })
   },
 
   async testChartshotCookies() {
-    return request('/settings/chartshot/cookies/test', { method: 'POST' })
+    return request('/screenshots/cookies/test', { method: 'POST' })
   },
 
   async getAIConfig() {

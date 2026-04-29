@@ -7,6 +7,7 @@ from api.tasks import router as tasks_router
 from api.settings import router as settings_router
 from api.ai import router as ai_router
 from api.scanner import router as scanner_router
+from api.screenshots import router as screenshots_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(health_router)
@@ -17,3 +18,4 @@ api_router.include_router(tasks_router)
 api_router.include_router(settings_router)
 api_router.include_router(ai_router)
 api_router.include_router(scanner_router)
+api_router.include_router(screenshots_router)

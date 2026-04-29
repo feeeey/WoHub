@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from database import get_db
 from config import settings
 from sources.pine_screener import run_screener, build_cross_analysis
-from channels.sender import send_text, send_photo
-from sources.chart_shot_client import chartshot_client
+from channels.sender import send_text
+from screenshots import capture_and_dispatch
 from app_logger import log as applog
 
 # Store last execution result for the test endpoint
@@ -147,12 +147,12 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
         _send_push(channel, message)
         _log_push(task_id, channel, message)
 
+    _record_signals(task_id, all_signals, resolutions, all_results)
+
     if "chart_shot" in actions and channel:
         for sym in list(all_signals.keys())[:3]:
             clean = sym.replace("BINANCE:", "").replace(".P", "")
-            _take_and_send_screenshot(task_id, clean, resolutions, channel)
-
-    _record_signals(task_id, all_signals, resolutions, all_results)
+            capture_and_dispatch(task_id, clean, resolutions, channel)
 
     if "ai_analysis" in actions:
         import threading
@@ -198,14 +198,14 @@ def _exec_market_scan(task_id, config, actions, channel):
         _send_push(channel, message)
         _log_push(task_id, channel, message)
 
+    _record_signals(task_id, overlaps, resolutions, all_results)
+
     if "chart_shot" in actions and channel and overlaps:
         shot_threshold = config.get("screenshot_threshold", 3)
         for sym in list(overlaps.keys()):
             if len(overlaps[sym]) >= shot_threshold:
                 clean = sym.replace("BINANCE:", "").replace(".P", "")
-                _take_and_send_screenshot(task_id, clean, resolutions[:1], channel)
-
-    _record_signals(task_id, overlaps, resolutions, all_results)
+                capture_and_dispatch(task_id, clean, resolutions[:1], channel)
 
     if "ai_analysis" in actions:
         import threading
@@ -268,7 +268,7 @@ def _exec_anomaly_watch(task_id, config, actions, channel):
 
     if "chart_shot" in actions and channel:
         for m in matches[:3]:
-            _take_and_send_screenshot(task_id, m["symbol"], resolutions[:1], channel)
+            capture_and_dispatch(task_id, m["symbol"], resolutions[:1], channel)
 
 
 def _exec_scheduled_shot(task_id, config, actions, channel):
@@ -276,7 +276,7 @@ def _exec_scheduled_shot(task_id, config, actions, channel):
     timeframes = config.get("timeframes", ["1h"])
 
     for sym in symbols:
-        _take_and_send_screenshot(task_id, sym, timeframes, channel)
+        capture_and_dispatch(task_id, sym, timeframes, channel)
 
 
 def _run_ai_and_edit(task_id, overlaps, channel, push_message):
@@ -316,17 +316,6 @@ def _send_push(channel, text):
         send_text(channel["type"], channel["config"], text)
     except Exception as e:
         print(f"[executor] Push failed: {e}")
-
-
-def _take_and_send_screenshot(task_id, symbol, timeframes, channel):
-    try:
-        result = chartshot_client.screenshot(symbol, timeframes)
-        if result.get("ok") and result.get("files"):
-            for filename in result["files"]:
-                photo_url = chartshot_client.screenshot_url(filename)
-                _send_push(channel, f"📸 {symbol} 截图: {photo_url}")
-    except Exception as e:
-        print(f"[executor] Screenshot failed for {symbol}: {e}")
 
 
 def _log_push(task_id, channel, content, status="success", error=None):

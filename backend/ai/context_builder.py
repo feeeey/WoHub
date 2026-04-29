@@ -2,6 +2,7 @@ import base64
 import os
 from database import get_db
 from config import settings
+from screenshots import get_screenshot_for_signal
 
 
 def build_context(signal_id: int) -> list:
@@ -23,11 +24,9 @@ def build_context(signal_id: int) -> list:
         ORDER BY s.triggered_at DESC LIMIT 10
     """, (sig["symbol"], sig["indicator"], signal_id)).fetchall()
 
-    screenshot = db.execute(
-        "SELECT file_path FROM screenshots WHERE signal_id = ?", (signal_id,)
-    ).fetchone()
-
     db.close()
+
+    screenshot_path = get_screenshot_for_signal(signal_id)
 
     lines = [
         f"## 信号信息",
@@ -67,17 +66,15 @@ def build_context(signal_id: int) -> list:
     text = "\n".join(lines)
     content = [{"type": "text", "text": text}]
 
-    if screenshot:
-        img_path = screenshot["file_path"]
-        if os.path.isfile(img_path):
-            try:
-                with open(img_path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode()
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64}"},
-                })
-            except Exception:
-                pass
+    if screenshot_path and os.path.isfile(screenshot_path):
+        try:
+            with open(screenshot_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}"},
+            })
+        except Exception:
+            pass
 
     return [{"role": "user", "content": content}]

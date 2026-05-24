@@ -52,7 +52,7 @@
       <div class="ctrl">
         <span class="refresh-dot" :class="{ loading }"></span>
         <span v-if="refreshSec > 0" class="countdown-text">{{ countdown }}s</span>
-        <button class="reload-btn" :disabled="loading" @click="loadData">
+        <button class="btn btn-primary btn-compact" :disabled="loading" @click="loadData">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="23 4 23 10 17 10" />
             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
@@ -69,7 +69,7 @@
       <div class="snapshot-card card" :class="{ live: current }">
         <div class="snapshot-header">
           <span class="snapshot-title">当前K线（形成中）</span>
-          <span v-if="current" class="badge badge-live">未收盘</span>
+          <span v-if="current" class="badge badge-warning">未收盘</span>
           <span v-else class="badge">无</span>
         </div>
         <div v-if="current" class="ohlc-grid">
@@ -84,7 +84,7 @@
       <div class="snapshot-card card">
         <div class="snapshot-header">
           <span class="snapshot-title">上一根已收盘K线</span>
-          <span class="badge badge-closed">已收盘</span>
+          <span class="badge badge-success">已收盘</span>
         </div>
         <div v-if="lastClosed" class="ohlc-grid">
           <div><span class="ohlc-label">O</span><span>{{ fmt(lastClosed.open) }}</span></div>
@@ -127,11 +127,11 @@
               <span class="pattern-name-en">{{ p.name }}</span>
             </div>
             <div class="pattern-meta">
-              <span class="tag">{{ categoryLabel(p.category) }}</span>
-              <span class="tag" :class="p.on_closed ? 'tag-ok' : 'tag-warn'">
+              <span class="badge">{{ categoryLabel(p.category) }}</span>
+              <span class="badge" :class="p.on_closed ? 'badge-success' : 'badge-warning'">
                 {{ p.on_closed ? '已收盘' : '未收盘' }}
               </span>
-              <span class="tag-light">K[{{ p.indices.join(', ') }}]</span>
+              <span class="indices-chip">K[{{ p.indices.join(', ') }}]</span>
             </div>
           </div>
         </div>
@@ -164,6 +164,7 @@ let chart = null
 let candleSeries = null
 let markerSet = null
 let resizeObserver = null
+let themeObserver = null
 let refreshTimer = null
 
 const current = computed(() => payload.value?.current || null)
@@ -177,29 +178,58 @@ const sortedPatterns = computed(() => {
 
 // ---- chart ----
 
+function readTheme() {
+  // Pull live values from the WoHub design system so the chart matches the
+  // rest of the UI (and follows the dark/light theme variable swap).
+  const root = getComputedStyle(document.documentElement)
+  const get = (name, fallback) => (root.getPropertyValue(name).trim() || fallback)
+  return {
+    text: get('--text-secondary', '#999999'),
+    grid: get('--border', 'rgba(255,255,255,0.07)'),
+    up: get('--success', '#66b366'),
+    down: get('--danger', '#d96a6a'),
+  }
+}
+
+function applyChartTheme() {
+  if (!chart || !candleSeries) return
+  const t = readTheme()
+  chart.applyOptions({
+    layout: { background: { color: 'transparent' }, textColor: t.text },
+    grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
+    rightPriceScale: { borderColor: t.grid },
+    timeScale: { borderColor: t.grid },
+  })
+  candleSeries.applyOptions({
+    upColor: t.up,
+    downColor: t.down,
+    borderUpColor: t.up,
+    borderDownColor: t.down,
+    wickUpColor: t.up,
+    wickDownColor: t.down,
+  })
+}
+
 function initChart() {
   if (!chartContainer.value) return
-  const isDark = document.documentElement.getAttribute('data-theme') !== 'light'
-  const text = isDark ? '#9ca3af' : '#4b5563'
-  const grid = isDark ? '#1f2937' : '#e5e7eb'
-  const bg = 'transparent'
+  const t = readTheme()
 
   chart = createChart(chartContainer.value, {
     autoSize: true,
-    layout: { background: { color: bg }, textColor: text },
-    grid: { vertLines: { color: grid }, horzLines: { color: grid } },
+    layout: { background: { color: 'transparent' }, textColor: t.text },
+    grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
     crosshair: { mode: CrosshairMode.Normal },
-    rightPriceScale: { borderColor: grid },
-    timeScale: { borderColor: grid, timeVisible: true, secondsVisible: false },
+    rightPriceScale: { borderColor: t.grid },
+    timeScale: { borderColor: t.grid, timeVisible: true, secondsVisible: false },
   })
 
   candleSeries = chart.addSeries(CandlestickSeries, {
-    upColor: '#10b981',
-    downColor: '#ef4444',
-    borderUpColor: '#10b981',
-    borderDownColor: '#ef4444',
-    wickUpColor: '#10b981',
-    wickDownColor: '#ef4444',
+    upColor: t.up,
+    downColor: t.down,
+    borderUpColor: t.up,
+    borderDownColor: t.down,
+    wickUpColor: t.up,
+    wickDownColor: t.down,
   })
 
   resizeObserver = new ResizeObserver(() => {
@@ -208,6 +238,15 @@ function initChart() {
     }
   })
   resizeObserver.observe(chartContainer.value)
+
+  // Re-skin the chart whenever the user flips between light and dark mode.
+  themeObserver = new MutationObserver((mutations) => {
+    if (mutations.some(m => m.attributeName === 'data-theme')) {
+      applyChartTheme()
+      updateChart() // re-paint markers with new colors
+    }
+  })
+  themeObserver.observe(document.documentElement, { attributes: true })
 }
 
 function updateChart() {
@@ -246,9 +285,10 @@ function updateChart() {
 }
 
 function colorFor(direction) {
-  if (direction === 'bullish') return '#10b981'
-  if (direction === 'bearish') return '#ef4444'
-  return '#9ca3af'
+  const t = readTheme()
+  if (direction === 'bullish') return t.up
+  if (direction === 'bearish') return t.down
+  return t.text
 }
 
 function highlightPattern(idx) {
@@ -360,6 +400,7 @@ onMounted(async () => {
 onUnmounted(() => {
   stopRefresh()
   if (resizeObserver) resizeObserver.disconnect()
+  if (themeObserver) themeObserver.disconnect()
   if (chart) {
     chart.remove()
     chart = null
@@ -373,26 +414,28 @@ onUnmounted(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 14px 20px;
-  padding: 16px 18px;
+  /* tighter than the default .card (28px) — toolbars feel cramped at 28 */
+  padding: 18px 22px;
   margin-bottom: 18px;
 }
 
 .ctrl {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .ctrl label {
   font-size: 12px;
   color: var(--text-secondary);
   font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .ctrl.checkbox label {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   cursor: pointer;
   color: var(--text-primary);
   font-size: 13px;
@@ -400,10 +443,12 @@ onUnmounted(() => {
 
 .ctrl-spacer { flex: 1; }
 
-.symbol-input { width: 130px; }
-.interval-select { width: 90px; }
-.limit-input { width: 80px; }
-.refresh-select { width: 90px; }
+/* Match the global input padding/radius — these widths just constrain the
+   horizontal extent without redefining the look. */
+.symbol-input { width: 140px; }
+.interval-select { width: 100px; }
+.limit-input { width: 90px; }
+.refresh-select { width: 100px; }
 
 .countdown-text {
   font-size: 13px;
@@ -425,47 +470,36 @@ onUnmounted(() => {
   50% { opacity: 0.3; }
 }
 
-.reload-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  border: none;
-  border-radius: var(--radius-sm);
+/* Tighter variant of the global .btn for the inline refresh button */
+.btn.btn-compact {
+  padding: 8px 16px;
   font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--transition-fast);
 }
-.reload-btn:hover { background: var(--accent); color: white; }
-.reload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .error-bar {
   background: var(--danger-subtle);
   color: var(--danger);
-  padding: 10px 16px;
-  border-radius: var(--radius-sm);
-  margin-bottom: 16px;
+  padding: 12px 18px;
+  border-radius: var(--radius-md);
+  margin-bottom: 18px;
   font-size: 13px;
 }
 
 .snapshot-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  gap: 16px;
   margin-bottom: 18px;
 }
 
-.snapshot-card { padding: 14px 18px; }
+.snapshot-card { padding: 22px; }
 .snapshot-card.live { border-left: 3px solid var(--accent); }
 
 .snapshot-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
 }
 
 .snapshot-title {
@@ -474,45 +508,37 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
-.badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--bg-tertiary);
-  color: var(--text-tertiary);
-}
-.badge-live { background: var(--accent-subtle); color: var(--accent); }
-.badge-closed { background: var(--success-subtle, var(--bg-tertiary)); color: var(--success); }
-
 .ohlc-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 6px 16px;
+  gap: 8px 18px;
   font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
 .ohlc-grid > div {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 8px;
 }
 .ohlc-label {
   font-size: 11px;
   color: var(--text-tertiary);
   font-weight: 600;
+  letter-spacing: 0.04em;
 }
 .ohlc-time {
   grid-column: 1 / -1;
   font-size: 12px;
   color: var(--text-tertiary);
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 .clr-positive { color: var(--success); }
 .clr-negative { color: var(--danger); }
 
+/* Chart needs less padding than a normal card so the plot fills the box */
 .chart-card {
-  padding: 8px;
+  padding: 12px;
   margin-bottom: 18px;
 }
 
@@ -522,41 +548,43 @@ onUnmounted(() => {
 }
 
 .section-title {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
-  margin: 4px 0 12px;
+  margin: 8px 0 14px;
   color: var(--text-primary);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  letter-spacing: -0.01em;
 }
 
 .section-count {
   font-size: 12px;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
-  padding: 2px 8px;
-  border-radius: 10px;
+  padding: 2px 10px;
+  border-radius: 20px;
   font-weight: 500;
 }
 
 .empty {
-  padding: 30px;
+  padding: 32px;
   text-align: center;
   color: var(--text-tertiary);
 }
 
 .pattern-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
 }
 
+/* Override the default .card 28px padding for these denser tiles */
 .pattern-card {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
+  gap: 14px;
+  padding: 18px 20px;
   cursor: pointer;
   transition: all var(--transition-fast);
   border-left: 3px solid transparent;
@@ -567,10 +595,11 @@ onUnmounted(() => {
 .pattern-card.dir-neutral { border-left-color: var(--text-tertiary); }
 .pattern-card.active {
   background: var(--accent-subtle);
+  border-color: var(--accent);
 }
 
 .pattern-icon {
-  font-size: 18px;
+  font-size: 20px;
   width: 28px;
   text-align: center;
 }
@@ -583,7 +612,7 @@ onUnmounted(() => {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 .pattern-name-zh { font-weight: 600; font-size: 14px; color: var(--text-primary); }
 .pattern-name-en { font-size: 12px; color: var(--text-tertiary); }
@@ -592,17 +621,15 @@ onUnmounted(() => {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  align-items: center;
 }
-.tag {
+.pattern-meta .badge { font-size: 11px; padding: 2px 8px; }
+.indices-chip {
   font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 4px;
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  padding: 2px 0;
 }
-.tag-ok { background: var(--success-subtle, var(--bg-tertiary)); color: var(--success); }
-.tag-warn { background: var(--warning-subtle, var(--bg-tertiary)); color: var(--warning, var(--text-tertiary)); }
-.tag-light { font-size: 11px; color: var(--text-tertiary); padding: 2px 0; }
 
 @media (max-width: 720px) {
   .snapshot-row { grid-template-columns: 1fr; }

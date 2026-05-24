@@ -22,6 +22,11 @@ def get_session() -> requests.Session:
         s = requests.Session()
         s.timeout = 10
         s.headers.update({"User-Agent": "WoHub/0.1"})
+        # Always opt out of HTTP(S)_PROXY env vars — if proxy_enabled is set
+        # we use the explicit project config; if it's off, we want a direct
+        # connection. Inheriting an unrelated env-level proxy (e.g. an IDE's
+        # built-in proxy) silently misroutes requests.
+        s.trust_env = False
         if settings.proxy_enabled:
             proxy_url = f"http://{settings.proxy_host}:{settings.proxy_port}"
             s.proxies = {"http": proxy_url, "https": proxy_url}
@@ -40,6 +45,7 @@ def _get_direct_session() -> requests.Session:
         s = requests.Session()
         s.timeout = 10
         s.headers.update({"User-Agent": "WoHub/0.1"})
+        s.trust_env = False
         _direct_session = s
         return _direct_session
 

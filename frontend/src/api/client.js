@@ -225,4 +225,14 @@ export const api = {
   async setDefaultStrategy(id) {
     return request(`/ai/strategies/${id}/default`, { method: 'POST' })
   },
+
+  async getKlines(symbol, interval, limit = 100, includeCurrent = false) {
+    const params = new URLSearchParams({
+      symbol,
+      interval,
+      limit: String(limit),
+      include_current: String(includeCurrent),
+    })
+    return request(`/klines/binance?${params}`)
+  },
 }

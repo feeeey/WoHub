@@ -6,6 +6,7 @@ import Channels from '../views/Channels.vue'
 import Settings from '../views/Settings.vue'
 import AI from '../views/AI.vue'
 import Scanner from '../views/Scanner.vue'
+import Klines from '../views/Klines.vue'
 
 const routes = [
   { path: '/login', component: Login, meta: { public: true } },
@@ -13,6 +14,7 @@ const routes = [
   { path: '/tasks', component: Tasks },
   { path: '/scanner', component: Scanner },
   { path: '/market', component: Market },
+  { path: '/klines', component: Klines },
   { path: '/channels', component: Channels },
   { path: '/settings', component: Settings },
   { path: '/ai', component: AI },

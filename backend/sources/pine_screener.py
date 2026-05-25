@@ -18,12 +18,28 @@ SCREENERS_DIR = Path(__file__).resolve().parent.parent / "screeners"
 
 SCREENER_NAMES = {
     "oscillator/divergence": "顶底背离",
+    "oscillator/divergence_top": "顶背离",
+    "oscillator/divergence_bottom": "底背离",
     "oscillator/overbought_zone": "超买",
     "oscillator/oversold_zone": "超卖",
     "oscillator/volatility_alert": "波动警报",
     "trend/shadows": "长上影/长下影",
     "trend/trend_volume_spike": "趋势爆量",
 }
+
+# Virtual screeners: no JSON config file of their own. They delegate to a base
+# screener and apply post-processing. Currently used to split 顶底背离 into
+# direction-aware variants.
+#   "virtual_key" -> (base_screener_key, direction)
+VIRTUAL_SCREENERS = {
+    "oscillator/divergence_top":    ("oscillator/divergence", "top"),
+    "oscillator/divergence_bottom": ("oscillator/divergence", "bottom"),
+}
+
+# Frontend UX: hide the catch-all 顶底背离 in favour of the two directional
+# variants. The base screener stays available for backward-compat with tasks
+# already persisted with the original key.
+_LIST_SCREENERS_HIDE = {"oscillator/divergence"}
 
 RESOLUTION_MAP = {
     "1m": "1", "5m": "5", "15m": "15", "30m": "30",
@@ -105,11 +121,21 @@ def list_screeners():
         for f in sorted(folder_path.glob("*.json")):
             name = f.stem
             key = f"{folder}/{name}"
+            if key in _LIST_SCREENERS_HIDE:
+                continue
             result.append({
                 "folder_type": folder,
                 "screener_name": name,
                 "label": SCREENER_NAMES.get(key, name),
             })
+    # Append virtual screeners in stable order
+    for key in VIRTUAL_SCREENERS:
+        folder, name = key.split("/", 1)
+        result.append({
+            "folder_type": folder,
+            "screener_name": name,
+            "label": SCREENER_NAMES.get(key, name),
+        })
     return result
 
 
@@ -118,6 +144,21 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
         raise ValueError(f"Invalid folder_type: {folder_type}")
     if resolution not in VALID_RESOLUTIONS:
         raise ValueError(f"Invalid resolution: {resolution}")
+
+    # Virtual screeners: delegate to a base screener, then post-process.
+    virtual_key = f"{folder_type}/{screener_name}"
+    if virtual_key in VIRTUAL_SCREENERS:
+        base_key, direction = VIRTUAL_SCREENERS[virtual_key]
+        base_folder, base_name = base_key.split("/", 1)
+        base_symbols = run_screener(base_folder, base_name, resolution, watchlist_id)
+        if not base_symbols:
+            return []
+        from sources.divergence_classify import filter_by_direction
+        filtered = filter_by_direction(base_symbols, resolution, direction)
+        applog("pine_screener", "info",
+               f"Virtual {virtual_key} {resolution}: "
+               f"{len(base_symbols)} base -> {len(filtered)} {direction}")
+        return filtered
 
     config_path = SCREENERS_DIR / folder_type / f"{screener_name}.json"
     if not config_path.exists():

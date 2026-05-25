@@ -17,10 +17,14 @@ def test_list_screeners():
         assert s["folder_type"] in ("oscillator", "trend")
 
 
-def test_list_screeners_has_divergence():
+def test_list_screeners_has_directional_divergence():
+    # The catch-all 顶底背离 (divergence) is hidden from the listed options;
+    # the two directional variants take its place.
     screeners = list_screeners()
     names = [s["screener_name"] for s in screeners]
-    assert "divergence" in names
+    assert "divergence_top" in names
+    assert "divergence_bottom" in names
+    assert "divergence" not in names
 
 
 MOCK_RESPONSE_TEXT = '{"snapshot":{"symbols":[{"s":"BINANCE:BTCUSDT.P"},{"s":"BINANCE:ETHUSDT.P"}]}}\n'

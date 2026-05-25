@@ -6,6 +6,7 @@ from typing import Any
 from klines.fetcher import fetch_klines
 from klines.models import Candle
 from klines.patterns import detect_patterns
+from klines.classification import classify
 
 
 def get_candles_with_patterns(
@@ -31,12 +32,19 @@ def get_candles_with_patterns(
         else:
             current = cd
 
+    def _with_classification(cd: Candle | None) -> dict | None:
+        if cd is None:
+            return None
+        d = asdict(cd)
+        d["classification"] = classify(cd).to_dict()
+        return d
+
     return {
         "symbol": symbol.upper(),
         "interval": interval,
         "server_time": int(time.time() * 1000),
         "candles": [asdict(c) for c in candles],
-        "current": asdict(current) if current else None,
-        "last_closed": asdict(last_closed) if last_closed else None,
+        "current": _with_classification(current),
+        "last_closed": _with_classification(last_closed),
         "patterns": [m.to_dict() for m in matches],
     }

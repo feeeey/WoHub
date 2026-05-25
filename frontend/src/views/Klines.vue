@@ -48,6 +48,19 @@
           <option :value="300">5min</option>
         </select>
       </div>
+      <div class="ctrl level-ctrl">
+        <label>分类层级</label>
+        <div class="level-chips">
+          <button
+            v-for="lv in levelOptions"
+            :key="lv.key"
+            class="level-chip"
+            :class="{ active: enabledLevels[lv.key] }"
+            :title="lv.title"
+            @click="toggleLevel(lv.key)"
+          >{{ lv.label }}</button>
+        </div>
+      </div>
       <div class="ctrl-spacer"></div>
       <div class="ctrl">
         <span class="refresh-dot" :class="{ loading }"></span>
@@ -79,6 +92,11 @@
           <div><span class="ohlc-label">C</span><span :class="current.close >= current.open ? 'clr-positive' : 'clr-negative'">{{ fmt(current.close) }}</span></div>
           <div class="ohlc-time">{{ fmtTime(current.open_time) }} → {{ fmtTime(current.close_time) }}</div>
         </div>
+        <ClassificationChain
+          v-if="current?.classification"
+          :classification="current.classification"
+          :enabled="enabledLevels"
+        />
       </div>
 
       <div class="snapshot-card card">
@@ -93,6 +111,11 @@
           <div><span class="ohlc-label">C</span><span :class="lastClosed.close >= lastClosed.open ? 'clr-positive' : 'clr-negative'">{{ fmt(lastClosed.close) }}</span></div>
           <div class="ohlc-time">{{ fmtTime(lastClosed.open_time) }} → {{ fmtTime(lastClosed.close_time) }}</div>
         </div>
+        <ClassificationChain
+          v-if="lastClosed?.classification"
+          :classification="lastClosed.classification"
+          :enabled="enabledLevels"
+        />
       </div>
     </div>
 
@@ -144,6 +167,32 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { createChart, CandlestickSeries, createSeriesMarkers, CrosshairMode } from 'lightweight-charts'
 import { api } from '../api/client.js'
+import ClassificationChain from '../components/ClassificationChain.vue'
+
+const LEVELS_STORAGE_KEY = 'wohub-klines-levels'
+const levelOptions = [
+  { key: 'L0', label: 'L0 阴阳', title: '纯粹按 close 与 open 的关系（阴/阳）' },
+  { key: 'L1', label: 'L1 实体', title: '阳线 / 阴线 / 十字（带实体大小阈值）' },
+  { key: 'L2', label: 'L2 方向', title: '看涨 / 看跌 / 无方向（综合判断）' },
+  { key: 'L3', label: 'L3 影线', title: '长上影 / 长下影 / 双长影 / 无显著影线' },
+]
+
+function loadEnabledLevels() {
+  try {
+    const raw = localStorage.getItem(LEVELS_STORAGE_KEY)
+    if (raw) {
+      const v = JSON.parse(raw)
+      if (v && typeof v === 'object') return { L0: !!v.L0, L1: !!v.L1, L2: !!v.L2, L3: !!v.L3 }
+    }
+  } catch {}
+  return { L0: true, L1: true, L2: true, L3: true }
+}
+const enabledLevels = ref(loadEnabledLevels())
+
+function toggleLevel(key) {
+  enabledLevels.value = { ...enabledLevels.value, [key]: !enabledLevels.value[key] }
+  try { localStorage.setItem(LEVELS_STORAGE_KEY, JSON.stringify(enabledLevels.value)) } catch {}
+}
 
 const intervals = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M']
 
@@ -474,6 +523,32 @@ onUnmounted(() => {
 .btn.btn-compact {
   padding: 8px 16px;
   font-size: 13px;
+}
+
+.level-ctrl { gap: 12px; }
+.level-chips {
+  display: inline-flex;
+  gap: 6px;
+}
+.level-chip {
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: inherit;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.level-chip:hover { color: var(--text-secondary); border-color: var(--text-tertiary); }
+.level-chip.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .error-bar {

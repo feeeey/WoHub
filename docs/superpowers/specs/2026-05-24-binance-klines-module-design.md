@@ -165,3 +165,73 @@ This module is intentionally pure-functional and side-effect-free (besides the n
 ## Open Questions
 
 None. All ambiguities were resolved during brainstorming (module location, pattern coverage scope, closed-vs-current semantics, ccxt-vs-native).
+
+---
+
+## Addendum (2026-05-25): Hierarchical Candle Classification
+
+A second pass alongside the 14 named patterns: a coarse-grained, 4-level
+classification applied to **every candle** (the service surfaces it for
+`current` and `last_closed`). Patterns answer "what specific pattern is this?";
+classification answers "what does this candle look like at a glance?".
+
+### Levels
+
+```
+L0: 阴(0) / 阳(1)        Binary close-vs-open. No body-size threshold.
+L1: 阳线 / 阴线 / 十字    Same direction, but doji-aware (body/range threshold).
+L2: 看涨 / 看跌 / 无方向  Derived from L1 + L3 with light TA logic.
+L3: 长上影 / 长下影 / 双长影 / 无显著影线   Wick prominence.
+```
+
+### Rules
+
+**L0** (pure binary):
+- `close >= open` → 阳(1)
+- `close < open`  → 阴(0)
+
+**L1** (body-aware):
+- `body / range >= 0.10` and `close > open` → 阳线
+- `body / range >= 0.10` and `close < open` → 阴线
+- otherwise → 十字
+
+**L3** (wick prominence, computed before L2):
+- `upper_wick >= 0.40*range AND lower_wick < 0.20*range` → 长上影
+- `lower_wick >= 0.40*range AND upper_wick < 0.20*range` → 长下影
+- `upper_wick >= 0.30*range AND lower_wick >= 0.30*range` → 双长影
+- otherwise → 无显著影线
+
+**L2** (L1 × L3 lookup; encodes a small amount of TA folk-wisdom):
+
+| L1 \ L3 | 长上影 | 长下影 | 双长影 | 无显著影线 |
+|---|---|---|---|---|
+| **阳线** | 看跌 (上涨乏力) | 看涨 (支撑) | 无方向 | 看涨 (强势阳) |
+| **阴线** | 看跌 (阻力) | 看涨 (下跌乏力) | 无方向 | 看跌 (强势阴) |
+| **十字** | 看跌 | 看涨 | 无方向 | 无方向 |
+
+### Data model
+
+```python
+@dataclass
+class CandleClassification:
+    l0: str   # "阳(1)" | "阴(0)"
+    l1: str   # "阳线" | "阴线" | "十字"
+    l2: str   # "看涨" | "看跌" | "无方向"
+    l3: str   # "长上影" | "长下影" | "双长影" | "无显著影线"
+```
+
+Returned from `klines/classification.py:classify(candle)`. The service attaches
+it as `current.classification` and `last_closed.classification` on the response.
+
+### Frontend
+
+A "分类层级" chip row in the Klines toolbar lets the user toggle each level
+(`[L0] [L1] [L2] [L3]`). Selection is persisted to localStorage; default = all
+selected.
+
+The snapshot cards then show a chain like `阳(1) → 阳线 → 看涨 → 长下影`,
+filtered down to the active levels. L2's colour follows the pattern direction
+colours already used elsewhere on the page (绿/红/灰).
+
+The 14 named patterns are unchanged — classification is parallel, not a
+replacement.

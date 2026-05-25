@@ -75,19 +75,28 @@ def test_doji_classifies_as_bottom_following_l0_tiebreaker():
         assert classify_divergence("BINANCE:BTCUSDT.P", "1h") == BOTTOM
 
 
-def test_unclosed_trailing_candle_is_skipped():
-    # The last candle is unclosed; we use the previous closed one (bearish -> top)
+def test_live_unclosed_candle_is_the_classification_target():
+    # The Pine screener fires on the live bar — we must look at THAT bar,
+    # not the previous closed one. Here the closed prior bar is bearish (would
+    # produce TOP under the old buggy logic) but the live bar is bullish, so
+    # the correct answer is BOTTOM.
     candles = [
-        _candle(open_=100, close=95, closed=True),
-        _candle(open_=95, close=99, closed=False),  # in-progress, would be bullish
+        _candle(open_=100, close=95, closed=True),    # previous closed: bearish
+        _candle(open_=95, close=99, closed=False),    # live (in-progress): bullish
     ]
+    with patch("sources.divergence_classify.fetch_klines", _fake(candles)):
+        assert classify_divergence("BINANCE:BTCUSDT.P", "1h") == BOTTOM
+
+
+def test_lone_unclosed_candle_still_classifies():
+    # Even if the response contains only the in-progress candle, we use it.
+    candles = [_candle(open_=100, close=95, closed=False)]
     with patch("sources.divergence_classify.fetch_klines", _fake(candles)):
         assert classify_divergence("BINANCE:BTCUSDT.P", "1h") == TOP
 
 
-def test_unclear_when_no_closed_candle_in_response():
-    candles = [_candle(open_=100, close=105, closed=False)]
-    with patch("sources.divergence_classify.fetch_klines", _fake(candles)):
+def test_unclear_when_empty_response():
+    with patch("sources.divergence_classify.fetch_klines", _fake([])):
         assert classify_divergence("BINANCE:BTCUSDT.P", "1h") == UNCLEAR
 
 

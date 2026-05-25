@@ -3,19 +3,26 @@ Divergence direction classification.
 
 The Pine screener reports symbols with a divergence signal but doesn't say
 whether it's a top or bottom divergence. We disambiguate here using the
-simplest possible rule: the L0 (阴/阳) classification of the trigger candle.
+simplest possible rule: the L0 (阴/阳) classification of the **live** trigger
+candle.
 
   阴线 (close < open) -> TOP    (顶背离)
   阳线 (close >= open) -> BOTTOM (底背离)
 
-This is intentionally crude — it can mis-label e.g. a small green bounce that
-prints right at a top, or a small red retest at a bottom. Acceptance: false
-positives will be filtered/refined by downstream logic in a later iteration.
-For now we want the cheapest, most predictable rule.
+IMPORTANT — we look at the current (in-progress) candle, not the previous
+closed one. Pine evaluates the divergence on the live bar, so the L0 of that
+same live bar is what determines direction. Using the previous closed bar
+would offset the judgement by one full timeframe and produce systematic
+mis-labels around inflection points.
 
-UNCLEAR is reserved for data-layer failures (symbol not on Binance,
-insufficient history, network error) — never for genuine ambiguity in the
-classification itself.
+This rule is intentionally crude — it can mis-label e.g. a small green
+bounce that prints right at a top, or a small red retest at a bottom.
+Acceptance: false positives will be filtered/refined by downstream logic in
+a later iteration. For now we want the cheapest, most predictable rule.
+
+UNCLEAR is reserved for data-layer failures (symbol not on Binance, empty
+response, network error) — never for genuine ambiguity in the classification
+itself.
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -42,14 +49,16 @@ def _to_binance_symbol(sym: str) -> str:
 def classify_divergence(symbol: str, interval: str) -> str:
     """Return TOP / BOTTOM / UNCLEAR for one symbol at one interval.
 
-    Looks at the most recent closed candle on Binance perp at the given
-    interval and labels by L0 (阴/阳 by close vs open).
+    Looks at the **live** (most-recent) Binance perp candle and labels by
+    L0 (阴/阳 by close vs open). If the live candle is still forming, its
+    `close` is the current price, which is exactly what the Pine screener
+    was looking at when it fired the signal.
     """
     binance_sym = _to_binance_symbol(symbol)
     try:
-        # limit=2 so the in-progress candle, if any, can be dropped and still
-        # leave one closed candle.
-        raw = fetch_klines(binance_sym, interval, limit=2)
+        # limit=1 is sufficient: fapi returns the in-progress candle as the
+        # last (and only here) element when one exists.
+        raw = fetch_klines(binance_sym, interval, limit=1)
     except KlineRequestError:
         return UNCLEAR
     except Exception as e:
@@ -57,11 +66,12 @@ def classify_divergence(symbol: str, interval: str) -> str:
                f"klines fetch failed for {binance_sym} {interval}: {e}")
         return UNCLEAR
 
-    closed = [c for c in raw if c.closed]
-    if not closed:
+    if not raw:
         return UNCLEAR
 
-    trigger = closed[-1]
+    # The screener fires on the live bar, so we look at the same bar — closed
+    # or not. classify() does not care about the closed flag.
+    trigger = raw[-1]
     l0 = classify(trigger).l0
     # L0 treats close == open as 阳(1); we inherit that tiebreaker.
     return TOP if l0 == "阴(0)" else BOTTOM

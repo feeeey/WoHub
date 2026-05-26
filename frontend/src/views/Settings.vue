@@ -114,6 +114,85 @@
       <div v-if="proxyMsg" class="action-msg" :class="proxyOk ? 'msg-ok' : 'msg-fail'">{{ proxyMsg }}</div>
     </div>
 
+    <!-- Trading Credentials (Binance API keys) -->
+    <div class="card section">
+      <div class="section-header">
+        <h3 class="section-title">交易凭据</h3>
+        <span class="badge" :class="tradingCreds.length ? 'badge-success' : 'badge-danger'">
+          {{ tradingCreds.length ? `已配置 ${tradingCreds.length} 个` : '未配置' }}
+        </span>
+      </div>
+      <p class="section-desc">
+        Binance 永续合约的 API key/secret。<strong>建议先用测试网</strong>（testnet.binancefuture.com）验证后再接入实盘。
+        Secret 经 Fernet 加密后存储（密钥派生自 <code>SECRET_KEY</code>）。
+        <strong>仅勾选「合约交易」权限，禁用「提现」</strong>，并在 Binance 端绑定 VPS 出口 IP。
+      </p>
+
+      <table v-if="tradingCreds.length" class="creds-table">
+        <thead>
+          <tr>
+            <th>标签</th>
+            <th>环境</th>
+            <th>API Key</th>
+            <th>状态</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="c in tradingCreds" :key="c.id">
+            <td>{{ c.label }}</td>
+            <td>
+              <span class="env-tag" :class="'env-' + c.env">
+                {{ c.env === 'mainnet' ? '⚠️ 实盘' : '🧪 测试网' }}
+              </span>
+            </td>
+            <td><code>...{{ c.api_key.slice(-8) }}</code></td>
+            <td>
+              <span class="badge" :class="c.enabled ? 'badge-success' : 'badge-warning'">
+                {{ c.enabled ? '启用' : '禁用' }}
+              </span>
+            </td>
+            <td class="cred-actions">
+              <button class="btn btn-sm" @click="testCred(c.id)">测试</button>
+              <button class="btn btn-sm" @click="toggleCred(c)">{{ c.enabled ? '禁用' : '启用' }}</button>
+              <button class="btn btn-sm btn-danger" @click="deleteCred(c.id)">删除</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="cred-form">
+        <h4>添加新凭据</h4>
+        <div class="form-row">
+          <div class="form-group">
+            <label>标签（自取）</label>
+            <input v-model="newCred.label" placeholder="testnet-主账户" />
+          </div>
+          <div class="form-group">
+            <label>环境</label>
+            <select v-model="newCred.env">
+              <option value="testnet">测试网 (testnet)</option>
+              <option value="mainnet">实盘 (mainnet)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>API Key</label>
+            <input v-model="newCred.api_key" placeholder="64 位字母数字" autocomplete="off" />
+          </div>
+          <div class="form-group">
+            <label>API Secret</label>
+            <input v-model="newCred.api_secret" placeholder="64 位字母数字" autocomplete="off" type="password" />
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary btn-sm" @click="addCred" :disabled="!canAddCred">添加</button>
+        </div>
+        <div v-if="credMsg" class="action-msg" :class="credOk ? 'msg-ok' : 'msg-fail'">{{ credMsg }}</div>
+      </div>
+    </div>
+
     <!-- AI Configuration -->
     <div class="card section">
       <div class="section-header">
@@ -233,7 +312,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api } from '../api/client.js'
 
 const info = ref({ version: '', cache_ttl: 0, min_volume_24h: 0, proxy_enabled: false })
@@ -253,6 +332,76 @@ const proxyHost = ref('host.docker.internal')
 const proxyPort = ref('10809')
 const proxyMsg = ref('')
 const proxyOk = ref(false)
+
+// ---- Trading credentials ----
+const tradingCreds = ref([])
+const newCred = ref({ label: '', env: 'testnet', api_key: '', api_secret: '' })
+const credMsg = ref('')
+const credOk = ref(false)
+const canAddCred = computed(() => {
+  const c = newCred.value
+  return c.label.trim() && c.api_key.length >= 10 && c.api_secret.length >= 10
+})
+
+async function loadTradingCreds() {
+  try {
+    const r = await api.listTradingCredentials()
+    tradingCreds.value = r.credentials || []
+  } catch {
+    tradingCreds.value = []
+  }
+}
+
+async function addCred() {
+  credMsg.value = ''
+  try {
+    await api.addTradingCredential({
+      label: newCred.value.label.trim(),
+      env: newCred.value.env,
+      api_key: newCred.value.api_key.trim(),
+      api_secret: newCred.value.api_secret.trim(),
+    })
+    credMsg.value = '已添加'
+    credOk.value = true
+    newCred.value = { label: '', env: 'testnet', api_key: '', api_secret: '' }
+    await loadTradingCreds()
+  } catch (e) {
+    credMsg.value = e.message || '添加失败'
+    credOk.value = false
+  }
+}
+
+async function deleteCred(id) {
+  if (!confirm('确认删除这个凭据？历史订单记录会保留。')) return
+  try {
+    await api.deleteTradingCredential(id)
+    await loadTradingCreds()
+  } catch (e) {
+    credMsg.value = e.message; credOk.value = false
+  }
+}
+
+async function toggleCred(c) {
+  try {
+    await api.toggleTradingCredential(c.id, !c.enabled)
+    await loadTradingCreds()
+  } catch (e) {
+    credMsg.value = e.message; credOk.value = false
+  }
+}
+
+async function testCred(id) {
+  credMsg.value = '测试中…'
+  credOk.value = true
+  try {
+    const r = await api.testTradingCredential(id)
+    credMsg.value = `✓ 凭据可用（${r.env} · ...${r.api_key_tail}）`
+    credOk.value = true
+  } catch (e) {
+    credMsg.value = `✗ ${e.message}`
+    credOk.value = false
+  }
+}
 
 function formatVolume(v) {
   if (!v) return '0'
@@ -472,6 +621,7 @@ onMounted(() => {
   loadPineCookies()
   loadChartshotStatus()
   loadProxy()
+  loadTradingCreds()
   loadAIConfig()
   loadStrategies()
   loadLogs()
@@ -692,5 +842,67 @@ onMounted(() => {
   padding: 20px;
   color: var(--text-tertiary);
   font-size: 13px;
+}
+
+/* ---- Trading credentials ---- */
+.creds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-bottom: 20px;
+}
+.creds-table thead th {
+  text-align: left;
+  padding: 10px 14px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.creds-table tbody td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.creds-table code {
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.cred-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.btn-danger {
+  color: var(--danger);
+}
+.btn-danger:hover {
+  background: var(--danger-subtle);
+}
+.env-tag {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 20px;
+}
+.env-tag.env-testnet {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+.env-tag.env-mainnet {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+.cred-form {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.cred-form h4 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 14px;
+  color: var(--text-primary);
 }
 </style>

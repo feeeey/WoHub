@@ -235,4 +235,40 @@ export const api = {
     })
     return request(`/klines/binance?${params}`)
   },
+
+  // ---- trading ----
+
+  async listTradingCredentials() {
+    return request('/trading/credentials')
+  },
+
+  async addTradingCredential(data) {
+    return request('/trading/credentials', { method: 'POST', body: JSON.stringify(data) })
+  },
+
+  async deleteTradingCredential(id) {
+    return request(`/trading/credentials/${id}`, { method: 'DELETE' })
+  },
+
+  async toggleTradingCredential(id, enabled) {
+    return request(`/trading/credentials/${id}/enabled`, {
+      method: 'POST', body: JSON.stringify({ enabled }),
+    })
+  },
+
+  async testTradingCredential(id) {
+    return request(`/trading/credentials/${id}/test`, { method: 'POST' })
+  },
+
+  async getTradingAccount(credentialId) {
+    return request(`/trading/account/${credentialId}`)
+  },
+
+  async placeTradingOrder(data) {
+    return request('/trading/order', { method: 'POST', body: JSON.stringify(data) })
+  },
+
+  async getTradingOrders(limit = 50) {
+    return request(`/trading/orders?limit=${limit}`)
+  },
 }

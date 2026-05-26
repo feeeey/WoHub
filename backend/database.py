@@ -103,6 +103,34 @@ CREATE TABLE IF NOT EXISTS ai_analyses (
     sentiment TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS trading_credentials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT NOT NULL,
+    env TEXT NOT NULL CHECK (env IN ('testnet', 'mainnet')),
+    api_key TEXT NOT NULL,
+    api_secret_enc TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS trading_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    credential_id INTEGER REFERENCES trading_credentials(id) ON DELETE SET NULL,
+    env TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    order_type TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    price REAL,
+    leverage INTEGER,
+    margin_type TEXT,
+    binance_order_id TEXT,
+    status TEXT NOT NULL,
+    response_json TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

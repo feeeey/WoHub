@@ -108,4 +108,5 @@ def test_init_db_is_idempotent():
         # Exclude internal SQLite tables (e.g. sqlite_sequence created by AUTOINCREMENT)
         tables = {row[0] for row in cursor.fetchall() if not row[0].startswith("sqlite_")}
         conn.close()
-        assert len(tables) == 10
+        # 10 original tables + 2 trading tables (trading_credentials, trading_orders)
+        assert len(tables) == 12

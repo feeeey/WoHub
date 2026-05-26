@@ -271,4 +271,31 @@ export const api = {
   async getTradingOrders(limit = 50) {
     return request(`/trading/orders?limit=${limit}`)
   },
+
+  async placeBracketOrder(data) {
+    return request('/trading/order/bracket', { method: 'POST', body: JSON.stringify(data) })
+  },
+
+  async closeTradingPosition(credentialId, symbol) {
+    return request('/trading/position/close', {
+      method: 'POST',
+      body: JSON.stringify({ credential_id: credentialId, symbol }),
+    })
+  },
+
+  async getOpenOrders(credentialId, symbol = null) {
+    const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''
+    return request(`/trading/open-orders/${credentialId}${q}`)
+  },
+
+  async cancelOpenOrder(credentialId, symbol, orderId) {
+    return request('/trading/open-orders/cancel', {
+      method: 'POST',
+      body: JSON.stringify({ credential_id: credentialId, symbol, order_id: orderId }),
+    })
+  },
+
+  async getBinanceOrderHistory(credentialId, symbol, limit = 50) {
+    return request(`/trading/history/${credentialId}?symbol=${encodeURIComponent(symbol)}&limit=${limit}`)
+  },
 }

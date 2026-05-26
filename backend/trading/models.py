@@ -29,7 +29,9 @@ class OrderRequest:
             raise ValueError("quantity must be > 0")
         if self.side not in ("BUY", "SELL"):
             raise ValueError(f"unknown side: {self.side}")
-        if self.order_type not in ("MARKET", "LIMIT"):
+        # MARKET / LIMIT are user-facing; STOP_MARKET / TAKE_PROFIT_MARKET are
+        # used internally for SL/TP protection orders (paired with closePosition).
+        if self.order_type not in ("MARKET", "LIMIT", "STOP_MARKET", "TAKE_PROFIT_MARKET"):
             raise ValueError(f"unknown order_type: {self.order_type}")
         if not (1 <= self.leverage <= 125):
             raise ValueError("leverage must be in [1, 125]")
@@ -73,3 +75,26 @@ class Balance:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class BracketOrderResult:
+    """Outcome of an entry-plus-protection submission.
+
+    The entry is the source of truth — if it fails, neither SL nor TP is
+    attempted. If the entry succeeds, SL and TP are best-effort: a failure
+    on either does NOT undo the entry; the caller sees the failure and
+    decides what to do (typically: place the missing protection manually).
+    """
+    ok: bool
+    entry: OrderResult
+    stop_loss: OrderResult | None = None
+    take_profit: OrderResult | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "entry": self.entry.to_dict(),
+            "stop_loss": self.stop_loss.to_dict() if self.stop_loss else None,
+            "take_profit": self.take_profit.to_dict() if self.take_profit else None,
+        }

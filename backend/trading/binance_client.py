@@ -194,25 +194,58 @@ def place_order(
     symbol: str,
     side: str,
     order_type: str,
-    quantity: float,
+    quantity: float | None = None,
     price: float | None = None,
+    stop_price: float | None = None,
     reduce_only: bool = False,
+    close_position: bool = False,
     time_in_force: str = "GTC",
 ) -> dict:
-    """POST /fapi/v1/order. Caller must have already set leverage/marginType."""
+    """POST /fapi/v1/order.
+
+    Supports:
+      MARKET / LIMIT — needs `quantity` (+ `price` for LIMIT)
+      STOP_MARKET / TAKE_PROFIT_MARKET — needs `stop_price`; when
+        close_position=True the whole position is liquidated on trigger and
+        `quantity` is omitted per Binance docs.
+
+    The caller must have already set leverage / margin type for the symbol.
+    """
     params: dict[str, Any] = {
         "symbol": symbol,
         "side": side,
         "type": order_type,
-        "quantity": quantity,
     }
-    if order_type == "LIMIT":
-        if price is None:
-            raise ValueError("LIMIT order requires price")
-        params["price"] = price
-        params["timeInForce"] = time_in_force
-    if reduce_only:
-        params["reduceOnly"] = "true"
+
+    if order_type in ("MARKET", "LIMIT"):
+        if quantity is None or quantity <= 0:
+            raise ValueError(f"{order_type} requires quantity > 0")
+        params["quantity"] = quantity
+        if order_type == "LIMIT":
+            if price is None:
+                raise ValueError("LIMIT order requires price")
+            params["price"] = price
+            params["timeInForce"] = time_in_force
+        if reduce_only:
+            params["reduceOnly"] = "true"
+
+    elif order_type in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
+        if stop_price is None:
+            raise ValueError(f"{order_type} requires stop_price")
+        params["stopPrice"] = stop_price
+        if close_position:
+            # Closes the whole position on trigger; quantity is forbidden by
+            # the API in this mode. closePosition implies reduceOnly.
+            params["closePosition"] = "true"
+        else:
+            if quantity is None or quantity <= 0:
+                raise ValueError(f"{order_type} without closePosition requires quantity")
+            params["quantity"] = quantity
+            if reduce_only:
+                params["reduceOnly"] = "true"
+
+    else:
+        raise ValueError(f"unsupported order_type: {order_type}")
 
     return _request("POST", env, "/fapi/v1/order", api_key, api_secret, params, signed=True)
 
@@ -221,5 +254,33 @@ def cancel_order(env: str, api_key: str, api_secret: str, symbol: str, order_id:
     return _request(
         "DELETE", env, "/fapi/v1/order", api_key, api_secret,
         {"symbol": symbol, "orderId": order_id},
+        signed=True,
+    )
+
+
+def open_orders(
+    env: str, api_key: str, api_secret: str,
+    symbol: str | None = None,
+) -> list[dict]:
+    """GET /fapi/v1/openOrders — all unfilled / pending orders.
+    When `symbol` is None returns ALL symbols (weight 40); otherwise just that
+    symbol (weight 1). Prefer per-symbol calls.
+    """
+    params = {"symbol": symbol} if symbol else {}
+    return _request("GET", env, "/fapi/v1/openOrders", api_key, api_secret, params, signed=True)
+
+
+def all_orders(
+    env: str, api_key: str, api_secret: str,
+    symbol: str, limit: int = 50,
+) -> list[dict]:
+    """GET /fapi/v1/allOrders — order history for one symbol (filled / canceled / etc).
+    Per Binance docs, `symbol` is required for this endpoint.
+    """
+    if limit < 1 or limit > 1000:
+        raise ValueError("limit must be in [1, 1000]")
+    return _request(
+        "GET", env, "/fapi/v1/allOrders", api_key, api_secret,
+        {"symbol": symbol, "limit": limit},
         signed=True,
     )

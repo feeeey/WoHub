@@ -101,14 +101,9 @@ const navItems = [
     icon: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />',
   },
   {
-    path: '/klines',
-    label: 'K线形态',
-    icon: '<line x1="6" y1="3" x2="6" y2="21" /><rect x="4" y="7" width="4" height="9" /><line x1="14" y1="3" x2="14" y2="21" /><rect x="12" y="11" width="4" height="6" /><line x1="20" y1="5" x2="20" y2="19" /><rect x="18" y="8" width="4" height="8" />',
-  },
-  {
     path: '/trade',
-    label: '合约交易',
-    icon: '<path d="M3 3v18h18" /><path d="M7 14l4-4 4 4 6-6" /><circle cx="7" cy="14" r="1" /><circle cx="11" cy="10" r="1" /><circle cx="15" cy="14" r="1" /><circle cx="21" cy="8" r="1" />',
+    label: '交易终端',
+    icon: '<line x1="6" y1="3" x2="6" y2="21" /><rect x="4" y="7" width="4" height="9" /><line x1="14" y1="3" x2="14" y2="21" /><rect x="12" y="11" width="4" height="6" /><line x1="20" y1="5" x2="20" y2="19" /><rect x="18" y="8" width="4" height="8" />',
   },
   {
     path: '/channels',

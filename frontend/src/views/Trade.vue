@@ -1,11 +1,11 @@
 <template>
   <div>
     <div class="page-header">
-      <h1>合约交易</h1>
-      <p>币安 USDT 永续 · 一键开仓</p>
+      <h1>交易终端</h1>
+      <p>K线 + 形态识别 + 币安永续下单 · 一处搞定</p>
     </div>
 
-    <!-- Empty state: no credentials configured -->
+    <!-- Empty state -->
     <div v-if="!credentials.length" class="card empty-card">
       <h3>尚未配置 API Key</h3>
       <p>请先到「系统设置 → 交易凭据」添加 Binance API key。建议先用测试网（testnet）验证后再切实盘。</p>
@@ -13,152 +13,275 @@
     </div>
 
     <template v-else>
-      <!-- Credential selector + env banner -->
-      <div class="card toolbar-card">
+      <!-- Toolbar -->
+      <div class="kline-toolbar card">
+        <div class="ctrl">
+          <label>币种</label>
+          <input v-model.trim="symbol" class="symbol-input" placeholder="BTCUSDT" @keyup.enter="loadAll" />
+        </div>
+        <div class="ctrl">
+          <label>周期</label>
+          <select v-model="interval" class="interval-select">
+            <option v-for="iv in intervals" :key="iv" :value="iv">{{ iv }}</option>
+          </select>
+        </div>
+        <div class="ctrl">
+          <label>根数</label>
+          <input v-model.number="limit" type="number" min="20" max="500" class="limit-input" />
+        </div>
+        <div class="ctrl checkbox">
+          <label>
+            <input v-model="includeCurrent" type="checkbox" />
+            <span>识别当前未收盘K线</span>
+          </label>
+        </div>
+        <div class="ctrl level-ctrl">
+          <label>分类层级</label>
+          <div class="level-chips">
+            <button v-for="lv in levelOptions" :key="lv.key"
+                    class="level-chip" :class="{ active: enabledLevels[lv.key] }"
+                    :title="lv.title" @click="toggleLevel(lv.key)">{{ lv.label }}</button>
+          </div>
+        </div>
+        <div class="ctrl">
+          <label>自动刷新</label>
+          <select v-model.number="refreshSec" class="refresh-select">
+            <option :value="0">关闭</option>
+            <option :value="10">10s</option>
+            <option :value="30">30s</option>
+            <option :value="60">60s</option>
+            <option :value="300">5min</option>
+          </select>
+        </div>
+        <div class="ctrl-spacer"></div>
+        <div class="ctrl">
+          <span class="refresh-dot" :class="{ loading }"></span>
+          <span v-if="refreshSec > 0" class="countdown-text">{{ countdown }}s</span>
+          <button class="btn btn-primary btn-compact" :disabled="loading" @click="loadAll">
+            刷新
+          </button>
+        </div>
+      </div>
+
+      <!-- Credential + account -->
+      <div class="card cred-bar">
         <div class="ctrl">
           <label>使用凭据</label>
-          <select v-model="selectedCredentialId" @change="reloadAccount">
+          <select v-model="selectedCredentialId" @change="loadAccountAndOrders">
             <option v-for="c in credentials" :key="c.id" :value="c.id" :disabled="!c.enabled">
-              {{ c.label }} ({{ c.env }}) · {{ c.api_key.slice(-6) }}{{ c.enabled ? '' : ' [已禁用]' }}
+              {{ c.label }} ({{ c.env }}) · …{{ c.api_key.slice(-6) }}{{ c.enabled ? '' : ' [已禁用]' }}
             </option>
           </select>
         </div>
         <div class="env-badge" :class="'env-' + currentEnv">
           {{ currentEnv === 'mainnet' ? '⚠️ 实盘' : '🧪 测试网' }}
         </div>
-        <button class="btn btn-compact" @click="reloadAccount" :disabled="loadingAccount">
-          {{ loadingAccount ? '加载中…' : '刷新账户' }}
-        </button>
-      </div>
-
-      <!-- Account snapshot -->
-      <div v-if="account" class="account-row">
-        <div class="card stat-card">
-          <div class="stat-label">钱包余额 (USDT)</div>
-          <div class="stat-value">{{ fmt(account.total_wallet_balance) }}</div>
-        </div>
-        <div class="card stat-card">
-          <div class="stat-label">可用保证金</div>
-          <div class="stat-value">{{ fmt(account.available_balance) }}</div>
-        </div>
-        <div class="card stat-card" :class="account.total_unrealized_pnl >= 0 ? 'clr-positive' : 'clr-negative'">
-          <div class="stat-label">未实现盈亏</div>
-          <div class="stat-value">{{ pnlSign(account.total_unrealized_pnl) }}{{ fmt(account.total_unrealized_pnl) }}</div>
-        </div>
-        <div class="card stat-card">
-          <div class="stat-label">活跃持仓</div>
-          <div class="stat-value">{{ account.positions.length }}</div>
+        <div v-if="account" class="account-inline">
+          <span>余额 <strong>{{ fmt(account.total_wallet_balance) }}</strong></span>
+          <span>可用 <strong>{{ fmt(account.available_balance) }}</strong></span>
+          <span :class="account.total_unrealized_pnl >= 0 ? 'clr-positive' : 'clr-negative'">
+            未实现盈亏 <strong>{{ pnlSign(account.total_unrealized_pnl) }}{{ fmt(account.total_unrealized_pnl) }}</strong>
+          </span>
         </div>
       </div>
 
-      <!-- Open-position form -->
-      <div class="card form-card">
-        <h3>开仓</h3>
+      <div v-if="errorMsg" class="error-bar">{{ errorMsg }}</div>
 
-        <div class="form-grid">
-          <div class="form-row">
-            <label>币种</label>
-            <input v-model.trim="form.symbol" placeholder="BTCUSDT" class="symbol-input" />
-          </div>
-
-          <div class="form-row">
-            <label>方向</label>
-            <div class="radio-group">
-              <label class="radio-pill" :class="{ active: form.side === 'BUY' }">
-                <input type="radio" value="BUY" v-model="form.side" /> 做多
-              </label>
-              <label class="radio-pill" :class="{ active: form.side === 'SELL' }">
-                <input type="radio" value="SELL" v-model="form.side" /> 做空
-              </label>
-            </div>
-          </div>
-
-          <div class="form-row">
-            <label>订单类型</label>
-            <div class="radio-group">
-              <label class="radio-pill" :class="{ active: form.order_type === 'MARKET' }">
-                <input type="radio" value="MARKET" v-model="form.order_type" /> 市价
-              </label>
-              <label class="radio-pill" :class="{ active: form.order_type === 'LIMIT' }">
-                <input type="radio" value="LIMIT" v-model="form.order_type" /> 限价
-              </label>
-            </div>
-          </div>
-
-          <div class="form-row">
-            <label>合约数量</label>
-            <input v-model.number="form.quantity" type="number" step="0.001" min="0" placeholder="0.001" />
-          </div>
-
-          <div v-if="form.order_type === 'LIMIT'" class="form-row">
-            <label>限价</label>
-            <input v-model.number="form.price" type="number" step="0.01" placeholder="70000.00" />
-          </div>
-
-          <div class="form-row">
-            <label>杠杆</label>
-            <input v-model.number="form.leverage" type="number" min="1" max="125" />
-          </div>
-
-          <div class="form-row">
-            <label>保证金模式</label>
-            <div class="radio-group">
-              <label class="radio-pill" :class="{ active: form.margin_type === 'ISOLATED' }">
-                <input type="radio" value="ISOLATED" v-model="form.margin_type" /> 逐仓
-              </label>
-              <label class="radio-pill" :class="{ active: form.margin_type === 'CROSSED' }">
-                <input type="radio" value="CROSSED" v-model="form.margin_type" /> 全仓
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <div class="form-actions">
-          <button
-            class="btn btn-primary"
-            :disabled="!canSubmit"
-            @click="openConfirm"
-          >下单（预览）</button>
-        </div>
-
-        <p v-if="lastResult" class="result-line" :class="lastResult.ok ? 'clr-positive' : 'clr-negative'">
-          {{ lastResult.ok
-            ? `✓ 下单成功，订单号 ${lastResult.binance_order_id} · 状态 ${lastResult.status}`
-            : `✗ 下单失败：${lastResult.error}` }}
-        </p>
+      <!-- Chart -->
+      <div class="chart-card card">
+        <div ref="chartContainer" class="chart-container"></div>
       </div>
 
-      <!-- Positions table -->
-      <div v-if="account?.positions?.length" class="card positions-card">
-        <h3>当前持仓</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>币种</th>
-              <th>方向</th>
-              <th>数量</th>
-              <th>开仓均价</th>
-              <th>标记价</th>
-              <th>未实现盈亏</th>
-              <th>杠杆 / 模式</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="p in account.positions" :key="p.symbol + p.position_amt">
-              <td class="col-symbol">{{ p.symbol }}</td>
-              <td :class="p.position_amt > 0 ? 'clr-positive' : 'clr-negative'">
-                {{ p.position_amt > 0 ? '多' : '空' }}
-              </td>
-              <td>{{ Math.abs(p.position_amt) }}</td>
-              <td>{{ fmt(p.entry_price) }}</td>
-              <td>{{ fmt(p.mark_price) }}</td>
-              <td :class="p.unrealized_pnl >= 0 ? 'clr-positive' : 'clr-negative'">
-                {{ pnlSign(p.unrealized_pnl) }}{{ fmt(p.unrealized_pnl) }}
-              </td>
-              <td>×{{ p.leverage }} / {{ p.margin_type }}</td>
-            </tr>
-          </tbody>
-        </table>
+      <!-- Snapshots -->
+      <div class="snapshot-row" v-if="klPayload">
+        <div class="snapshot-card card" :class="{ live: current }">
+          <div class="snapshot-header">
+            <span class="snapshot-title">当前K线（形成中）</span>
+            <span v-if="current" class="badge badge-warning">未收盘</span>
+            <span v-else class="badge">无</span>
+          </div>
+          <div v-if="current" class="ohlc-grid">
+            <div><span class="ohlc-label">O</span><span>{{ fmt(current.open) }}</span></div>
+            <div><span class="ohlc-label">H</span><span class="clr-positive">{{ fmt(current.high) }}</span></div>
+            <div><span class="ohlc-label">L</span><span class="clr-negative">{{ fmt(current.low) }}</span></div>
+            <div><span class="ohlc-label">C</span><span :class="current.close >= current.open ? 'clr-positive' : 'clr-negative'">{{ fmt(current.close) }}</span></div>
+          </div>
+          <ClassificationChain v-if="current?.classification" :classification="current.classification" :enabled="enabledLevels" />
+        </div>
+        <div class="snapshot-card card">
+          <div class="snapshot-header">
+            <span class="snapshot-title">上一根已收盘K线</span>
+            <span class="badge badge-success">已收盘</span>
+          </div>
+          <div v-if="lastClosed" class="ohlc-grid">
+            <div><span class="ohlc-label">O</span><span>{{ fmt(lastClosed.open) }}</span></div>
+            <div><span class="ohlc-label">H</span><span class="clr-positive">{{ fmt(lastClosed.high) }}</span></div>
+            <div><span class="ohlc-label">L</span><span class="clr-negative">{{ fmt(lastClosed.low) }}</span></div>
+            <div><span class="ohlc-label">C</span><span :class="lastClosed.close >= lastClosed.open ? 'clr-positive' : 'clr-negative'">{{ fmt(lastClosed.close) }}</span></div>
+          </div>
+          <ClassificationChain v-if="lastClosed?.classification" :classification="lastClosed.classification" :enabled="enabledLevels" />
+        </div>
+      </div>
+
+      <!-- Trade form + patterns -->
+      <div class="main-row">
+        <div class="card trade-card">
+          <TradeForm
+            :symbol="symbol"
+            :credential-id="selectedCredentialId"
+            :submitting="submitting"
+            @open-confirm="onOpenConfirm"
+          />
+        </div>
+        <div class="patterns-block">
+          <h2 class="section-title">
+            识别到的形态
+            <span class="section-count">{{ klPayload?.patterns?.length || 0 }}</span>
+          </h2>
+          <div v-if="!klPayload?.patterns?.length" class="empty card">尚未识别到形态</div>
+          <div v-else class="pattern-list">
+            <div v-for="(p, idx) in sortedPatterns" :key="idx"
+                 class="pattern-card card" :class="['dir-' + p.direction]">
+              <div class="pattern-icon" :class="'dir-' + p.direction">
+                <span v-if="p.direction === 'bullish'">▲</span>
+                <span v-else-if="p.direction === 'bearish'">▼</span>
+                <span v-else>●</span>
+              </div>
+              <div class="pattern-body">
+                <div class="pattern-name">
+                  <span class="pattern-name-zh">{{ p.name_zh }}</span>
+                  <span class="pattern-name-en">{{ p.name }}</span>
+                </div>
+                <div class="pattern-meta">
+                  <span class="badge">{{ catLabel(p.category) }}</span>
+                  <span class="badge" :class="p.on_closed ? 'badge-success' : 'badge-warning'">
+                    {{ p.on_closed ? '已收盘' : '未收盘' }}
+                  </span>
+                  <span class="indices-chip">K[{{ p.indices.join(', ') }}]</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="card tabs-card">
+        <div class="tabs-row">
+          <button v-for="t in tabs" :key="t.key" class="tab-btn"
+                  :class="{ active: activeTab === t.key }" @click="activeTab = t.key">
+            {{ t.label }}<span v-if="t.count != null" class="tab-count">{{ t.count }}</span>
+          </button>
+        </div>
+
+        <!-- Positions -->
+        <div v-show="activeTab === 'positions'">
+          <table v-if="account?.positions?.length">
+            <thead><tr>
+              <th>币种</th><th>方向</th><th>数量</th><th>开仓均价</th>
+              <th>标记价</th><th>未实现盈亏</th><th>杠杆 / 模式</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="p in account.positions" :key="p.symbol + p.position_amt">
+                <td class="col-symbol">{{ p.symbol }}</td>
+                <td :class="p.position_amt > 0 ? 'clr-positive' : 'clr-negative'">
+                  {{ p.position_amt > 0 ? '多' : '空' }}
+                </td>
+                <td>{{ Math.abs(p.position_amt) }}</td>
+                <td>{{ fmt(p.entry_price) }}</td>
+                <td>{{ fmt(p.mark_price) }}</td>
+                <td :class="p.unrealized_pnl >= 0 ? 'clr-positive' : 'clr-negative'">
+                  {{ pnlSign(p.unrealized_pnl) }}{{ fmt(p.unrealized_pnl) }}
+                </td>
+                <td>×{{ p.leverage }} / {{ p.margin_type }}</td>
+                <td class="row-actions">
+                  <button class="btn btn-sm btn-danger" @click="onClosePosition(p)">平仓</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="tab-empty">无持仓</div>
+        </div>
+
+        <!-- Open orders -->
+        <div v-show="activeTab === 'open'">
+          <table v-if="openOrders.length">
+            <thead><tr>
+              <th>订单ID</th><th>币种</th><th>方向</th><th>类型</th>
+              <th>数量</th><th>价格</th><th>触发价</th><th>状态</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="o in openOrders" :key="o.orderId">
+                <td><code>{{ o.orderId }}</code></td>
+                <td>{{ o.symbol }}</td>
+                <td :class="o.side === 'BUY' ? 'clr-positive' : 'clr-negative'">{{ o.side === 'BUY' ? '买' : '卖' }}</td>
+                <td>{{ orderTypeLabel(o.type) }}</td>
+                <td>{{ o.origQty }}</td>
+                <td>{{ o.price && parseFloat(o.price) > 0 ? fmt(o.price) : '-' }}</td>
+                <td>{{ o.stopPrice && parseFloat(o.stopPrice) > 0 ? fmt(o.stopPrice) : '-' }}</td>
+                <td>{{ o.status }}</td>
+                <td class="row-actions">
+                  <button class="btn btn-sm" @click="onCancelOrder(o)">取消</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="tab-empty">无待成交委托单</div>
+        </div>
+
+        <!-- Binance history -->
+        <div v-show="activeTab === 'history'">
+          <p v-if="!histSymbol" class="hist-hint">输入币种查询历史订单</p>
+          <div class="hist-toolbar">
+            <input v-model="histSymbol" placeholder="BTCUSDT" class="hist-input" @keyup.enter="loadHistory" />
+            <button class="btn btn-sm" @click="loadHistory" :disabled="!histSymbol">查询</button>
+          </div>
+          <table v-if="history.length">
+            <thead><tr>
+              <th>时间</th><th>币种</th><th>方向</th><th>类型</th>
+              <th>数量</th><th>均价</th><th>状态</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="o in history" :key="o.orderId">
+                <td>{{ fmtTime(o.updateTime || o.time) }}</td>
+                <td>{{ o.symbol }}</td>
+                <td :class="o.side === 'BUY' ? 'clr-positive' : 'clr-negative'">{{ o.side }}</td>
+                <td>{{ orderTypeLabel(o.type) }}</td>
+                <td>{{ o.executedQty }}/{{ o.origQty }}</td>
+                <td>{{ o.avgPrice && parseFloat(o.avgPrice) > 0 ? fmt(o.avgPrice) : '-' }}</td>
+                <td>{{ o.status }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else-if="histSymbol" class="tab-empty">无历史订单</div>
+        </div>
+
+        <!-- Audit log -->
+        <div v-show="activeTab === 'audit'">
+          <table v-if="auditOrders.length">
+            <thead><tr>
+              <th>时间</th><th>环境</th><th>币种</th><th>方向</th><th>类型</th>
+              <th>数量</th><th>限价</th><th>×</th><th>状态</th><th>错误</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="o in auditOrders" :key="o.id">
+                <td>{{ o.created_at }}</td>
+                <td><span class="env-tag" :class="'env-' + o.env">{{ o.env === 'mainnet' ? '实盘' : '测试网' }}</span></td>
+                <td>{{ o.symbol }}</td>
+                <td :class="o.side === 'BUY' ? 'clr-positive' : 'clr-negative'">{{ o.side }}</td>
+                <td>{{ orderTypeLabel(o.order_type) }}</td>
+                <td>{{ o.quantity }}</td>
+                <td>{{ o.price || '-' }}</td>
+                <td>{{ o.leverage }}</td>
+                <td>
+                  <span :class="o.status === 'FAILED' ? 'clr-negative' : 'clr-positive'">{{ o.status }}</span>
+                </td>
+                <td class="audit-err">{{ o.error_message || '' }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="tab-empty">本地暂无下单记录</div>
+        </div>
       </div>
     </template>
 
@@ -168,25 +291,29 @@
         <h3>确认下单</h3>
         <div class="confirm-line">
           <span class="confirm-label">币种</span>
-          <span class="confirm-value">{{ form.symbol.toUpperCase() }}</span>
+          <span class="confirm-value">{{ pendingPayload.symbol }}</span>
         </div>
         <div class="confirm-line">
           <span class="confirm-label">方向 / 类型</span>
-          <span class="confirm-value" :class="form.side === 'BUY' ? 'clr-positive' : 'clr-negative'">
-            {{ form.side === 'BUY' ? '做多' : '做空' }} · {{ form.order_type === 'MARKET' ? '市价' : '限价' }}
+          <span class="confirm-value" :class="pendingPayload.side === 'BUY' ? 'clr-positive' : 'clr-negative'">
+            {{ pendingPayload.side === 'BUY' ? '做多' : '做空' }} · {{ pendingPayload.order_type === 'MARKET' ? '市价' : '限价' }}
           </span>
         </div>
         <div class="confirm-line">
-          <span class="confirm-label">数量</span>
-          <span class="confirm-value">{{ form.quantity }} 张</span>
+          <span class="confirm-label">数量 / 杠杆</span>
+          <span class="confirm-value">{{ pendingPayload.quantity }} 张 · ×{{ pendingPayload.leverage }}</span>
         </div>
-        <div v-if="form.order_type === 'LIMIT'" class="confirm-line">
+        <div v-if="pendingPayload.order_type === 'LIMIT'" class="confirm-line">
           <span class="confirm-label">限价</span>
-          <span class="confirm-value">{{ form.price }}</span>
+          <span class="confirm-value">{{ pendingPayload.price }}</span>
         </div>
-        <div class="confirm-line">
-          <span class="confirm-label">杠杆 / 模式</span>
-          <span class="confirm-value">×{{ form.leverage }} / {{ form.margin_type === 'ISOLATED' ? '逐仓' : '全仓' }}</span>
+        <div v-if="pendingPayload.stop_loss_price" class="confirm-line">
+          <span class="confirm-label">止损 (SL)</span>
+          <span class="confirm-value clr-negative">{{ pendingPayload.stop_loss_price }} · 触发市价整仓平</span>
+        </div>
+        <div v-if="pendingPayload.take_profit_price" class="confirm-line">
+          <span class="confirm-label">止盈 (TP)</span>
+          <span class="confirm-value clr-positive">{{ pendingPayload.take_profit_price }} · 触发市价整仓平</span>
         </div>
         <div class="confirm-line">
           <span class="confirm-label">环境</span>
@@ -199,11 +326,9 @@
         <p v-if="submitError" class="modal-error">{{ submitError }}</p>
         <div class="modal-actions">
           <button class="btn" @click="confirmOpen = false" :disabled="submitting">取消</button>
-          <button
-            class="btn btn-primary"
-            @click="submitOrder"
-            :disabled="submitting"
-          >{{ submitting ? '提交中…' : '确认提交' }}</button>
+          <button class="btn btn-primary" @click="submitOrder" :disabled="submitting">
+            {{ submitting ? '提交中…' : '确认提交' }}
+          </button>
         </div>
       </div>
     </div>
@@ -211,97 +336,305 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { createChart, CandlestickSeries, createSeriesMarkers, CrosshairMode } from 'lightweight-charts'
 import { api } from '../api/client.js'
+import ClassificationChain from '../components/ClassificationChain.vue'
+import TradeForm from '../components/TradeForm.vue'
+
+// ---- toolbar / klines state ----
+
+const intervals = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M']
+const symbol = ref('BTCUSDT')
+const interval = ref('4h')
+const limit = ref(100)
+const includeCurrent = ref(false)
+const refreshSec = ref(30)
+const loading = ref(false)
+const errorMsg = ref('')
+const countdown = ref(0)
+
+const klPayload = ref(null)
+const current = computed(() => klPayload.value?.current || null)
+const lastClosed = computed(() => klPayload.value?.last_closed || null)
+const sortedPatterns = computed(() => {
+  const list = klPayload.value?.patterns || []
+  return [...list].sort((a, b) => Math.max(...b.indices) - Math.max(...a.indices))
+})
+
+// ---- L0/L1/L2/L3 level toggles ----
+
+const LEVELS_STORAGE_KEY = 'wohub-klines-levels'
+const levelOptions = [
+  { key: 'L0', label: 'L0', title: '阴/阳' },
+  { key: 'L1', label: 'L1', title: '阳线 / 阴线 / 十字' },
+  { key: 'L2', label: 'L2', title: '看涨 / 看跌 / 无方向' },
+  { key: 'L3', label: 'L3', title: '影线' },
+]
+function loadEnabledLevels() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LEVELS_STORAGE_KEY) || '{}')
+    return { L0: !!v.L0, L1: !!v.L1, L2: !!v.L2, L3: !!v.L3 }
+  } catch { return { L0: true, L1: true, L2: true, L3: true } }
+}
+const enabledLevels = ref(loadEnabledLevels())
+if (!enabledLevels.value.L0 && !enabledLevels.value.L1 && !enabledLevels.value.L2 && !enabledLevels.value.L3) {
+  enabledLevels.value = { L0: true, L1: true, L2: true, L3: true }
+}
+function toggleLevel(k) {
+  enabledLevels.value = { ...enabledLevels.value, [k]: !enabledLevels.value[k] }
+  try { localStorage.setItem(LEVELS_STORAGE_KEY, JSON.stringify(enabledLevels.value)) } catch {}
+}
+
+// ---- credentials / account / orders ----
 
 const credentials = ref([])
 const selectedCredentialId = ref(null)
 const account = ref(null)
-const loadingAccount = ref(false)
-
-const form = ref({
-  symbol: 'BTCUSDT',
-  side: 'BUY',
-  order_type: 'MARKET',
-  quantity: 0.001,
-  price: null,
-  leverage: 10,
-  margin_type: 'ISOLATED',
-})
-
-const confirmOpen = ref(false)
-const submitting = ref(false)
-const submitError = ref('')
-const lastResult = ref(null)
+const openOrders = ref([])
+const auditOrders = ref([])
+const history = ref([])
+const histSymbol = ref('')
 
 const currentEnv = computed(() => {
   const c = credentials.value.find(c => c.id === selectedCredentialId.value)
   return c?.env || 'testnet'
 })
 
-const canSubmit = computed(() => {
-  if (!selectedCredentialId.value) return false
-  if (!form.value.symbol || !form.value.quantity || form.value.quantity <= 0) return false
-  if (form.value.order_type === 'LIMIT' && (!form.value.price || form.value.price <= 0)) return false
-  return true
-})
+const tabs = computed(() => [
+  { key: 'positions', label: '持仓', count: account.value?.positions?.length ?? 0 },
+  { key: 'open', label: '委托单', count: openOrders.value.length },
+  { key: 'history', label: '历史', count: null },
+  { key: 'audit', label: '审计', count: auditOrders.value.length },
+])
+const activeTab = ref('positions')
 
-async function reloadCredentials() {
+// ---- chart ----
+
+const chartContainer = ref(null)
+let chart = null
+let candleSeries = null
+let markerSet = null
+let priceLines = []
+let resizeObserver = null
+let themeObserver = null
+let refreshTimer = null
+
+function readTheme() {
+  const r = getComputedStyle(document.documentElement)
+  const get = (n, d) => (r.getPropertyValue(n).trim() || d)
+  return {
+    text: get('--text-secondary', '#999999'),
+    grid: get('--border', 'rgba(255,255,255,0.07)'),
+    up: get('--success', '#66b366'),
+    down: get('--danger', '#d96a6a'),
+  }
+}
+
+function applyChartTheme() {
+  if (!chart || !candleSeries) return
+  const t = readTheme()
+  chart.applyOptions({
+    layout: { background: { color: 'transparent' }, textColor: t.text },
+    grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
+    rightPriceScale: { borderColor: t.grid },
+    timeScale: { borderColor: t.grid },
+  })
+  candleSeries.applyOptions({
+    upColor: t.up, downColor: t.down,
+    borderUpColor: t.up, borderDownColor: t.down,
+    wickUpColor: t.up, wickDownColor: t.down,
+  })
+}
+
+function initChart() {
+  if (!chartContainer.value) return
+  const t = readTheme()
+  chart = createChart(chartContainer.value, {
+    autoSize: true,
+    layout: { background: { color: 'transparent' }, textColor: t.text },
+    grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
+    crosshair: { mode: CrosshairMode.Normal },
+    rightPriceScale: { borderColor: t.grid },
+    timeScale: { borderColor: t.grid, timeVisible: true, secondsVisible: false },
+  })
+  candleSeries = chart.addSeries(CandlestickSeries, {
+    upColor: t.up, downColor: t.down,
+    borderUpColor: t.up, borderDownColor: t.down,
+    wickUpColor: t.up, wickDownColor: t.down,
+  })
+
+  resizeObserver = new ResizeObserver(() => {
+    if (chart && chartContainer.value) {
+      chart.applyOptions({ width: chartContainer.value.clientWidth })
+    }
+  })
+  resizeObserver.observe(chartContainer.value)
+
+  themeObserver = new MutationObserver((muts) => {
+    if (muts.some(m => m.attributeName === 'data-theme')) {
+      applyChartTheme()
+      updateChart()
+    }
+  })
+  themeObserver.observe(document.documentElement, { attributes: true })
+}
+
+function updateChart() {
+  if (!chart || !candleSeries || !klPayload.value) return
+  const data = klPayload.value.candles.map(c => ({
+    time: Math.floor(c.open_time / 1000),
+    open: c.open, high: c.high, low: c.low, close: c.close,
+  }))
+  candleSeries.setData(data)
+
+  // Pattern markers
+  const t = readTheme()
+  const markers = (klPayload.value.patterns || []).map(p => {
+    const latestIdx = Math.max(...p.indices)
+    const absIdx = data.length + latestIdx
+    if (absIdx < 0 || absIdx >= data.length) return null
+    const candle = data[absIdx]
+    return {
+      time: candle.time,
+      position: p.direction === 'bearish' ? 'aboveBar' : 'belowBar',
+      color: p.direction === 'bullish' ? t.up : (p.direction === 'bearish' ? t.down : t.text),
+      shape: p.direction === 'bearish' ? 'arrowDown' : (p.direction === 'bullish' ? 'arrowUp' : 'circle'),
+      text: p.name_zh,
+    }
+  }).filter(Boolean)
+
+  if (markerSet) markerSet.setMarkers(markers)
+  else markerSet = createSeriesMarkers(candleSeries, markers)
+
+  chart.timeScale().fitContent()
+  redrawPriceLines()
+}
+
+function redrawPriceLines() {
+  if (!candleSeries) return
+  // Clear existing
+  for (const l of priceLines) { try { candleSeries.removePriceLine(l) } catch {} }
+  priceLines = []
+  const t = readTheme()
+
+  const sym = symbol.value.toUpperCase()
+
+  // Position entry line for the current symbol
+  const pos = (account.value?.positions || []).find(p => p.symbol === sym)
+  if (pos && pos.position_amt !== 0) {
+    priceLines.push(candleSeries.createPriceLine({
+      price: pos.entry_price,
+      color: pos.position_amt > 0 ? t.up : t.down,
+      lineWidth: 1, lineStyle: 0, axisLabelVisible: true,
+      title: `${pos.position_amt > 0 ? 'Long' : 'Short'} ${Math.abs(pos.position_amt)}`,
+    }))
+  }
+
+  // Open orders for the current symbol
+  for (const o of openOrders.value) {
+    if (o.symbol !== sym) continue
+    const isLimit = o.type === 'LIMIT'
+    const isStop = o.type === 'STOP_MARKET' || o.type === 'STOP'
+    const isTP = o.type === 'TAKE_PROFIT_MARKET' || o.type === 'TAKE_PROFIT'
+    const price = parseFloat(o.price || o.stopPrice || 0)
+    if (!price) continue
+    let color = t.text, label = o.type
+    if (isStop) { color = t.down; label = `SL @ ${price}` }
+    else if (isTP) { color = t.up; label = `TP @ ${price}` }
+    else if (isLimit) { color = t.text; label = `LIMIT ${o.side} ${o.origQty}` }
+
+    priceLines.push(candleSeries.createPriceLine({
+      price, color, lineWidth: 1, lineStyle: 2,
+      axisLabelVisible: true, title: label,
+    }))
+  }
+}
+
+// ---- data loading ----
+
+async function loadCredentials() {
   try {
     const { credentials: list } = await api.listTradingCredentials()
     credentials.value = list
     if (!selectedCredentialId.value && list.length) {
-      const enabled = list.find(c => c.enabled) || list[0]
-      selectedCredentialId.value = enabled.id
+      selectedCredentialId.value = (list.find(c => c.enabled) || list[0]).id
     }
-  } catch (e) {
-    credentials.value = []
-  }
+  } catch { credentials.value = [] }
 }
 
-async function reloadAccount() {
-  if (!selectedCredentialId.value) return
-  loadingAccount.value = true
+async function loadKlines() {
+  if (!symbol.value) return
+  loading.value = true
+  errorMsg.value = ''
   try {
-    account.value = await api.getTradingAccount(selectedCredentialId.value)
+    const sym = symbol.value.toUpperCase().endsWith('USDT')
+      ? symbol.value.toUpperCase()
+      : symbol.value.toUpperCase() + 'USDT'
+    klPayload.value = await api.getKlines(sym, interval.value, limit.value, includeCurrent.value)
+    await nextTick()
+    updateChart()
+    resetCountdown()
   } catch (e) {
-    account.value = null
-    submitError.value = e.message
+    errorMsg.value = e.message || '加载失败'
   } finally {
-    loadingAccount.value = false
+    loading.value = false
   }
 }
 
-function openConfirm() {
+async function loadAccountAndOrders() {
+  if (!selectedCredentialId.value) return
+  const promises = [
+    api.getTradingAccount(selectedCredentialId.value).then(d => { account.value = d }).catch(() => { account.value = null }),
+    api.getOpenOrders(selectedCredentialId.value).then(d => { openOrders.value = d.orders || [] }).catch(() => { openOrders.value = [] }),
+    api.getTradingOrders(20).then(d => { auditOrders.value = d.orders || [] }).catch(() => { auditOrders.value = [] }),
+  ]
+  await Promise.all(promises)
+  redrawPriceLines()
+}
+
+async function loadAll() {
+  await Promise.all([loadKlines(), loadAccountAndOrders()])
+}
+
+async function loadHistory() {
+  if (!histSymbol.value || !selectedCredentialId.value) return
+  try {
+    const d = await api.getBinanceOrderHistory(selectedCredentialId.value, histSymbol.value.toUpperCase())
+    history.value = d.orders || []
+  } catch (e) {
+    errorMsg.value = e.message
+  }
+}
+
+// ---- actions ----
+
+const submitting = ref(false)
+const confirmOpen = ref(false)
+const submitError = ref('')
+const pendingPayload = ref({})
+
+function onOpenConfirm(payload) {
   submitError.value = ''
-  lastResult.value = null
+  pendingPayload.value = payload
   confirmOpen.value = true
 }
 
 async function submitOrder() {
-  submitError.value = ''
   submitting.value = true
+  submitError.value = ''
   try {
-    const payload = {
-      credential_id: selectedCredentialId.value,
-      symbol: form.value.symbol.toUpperCase(),
-      side: form.value.side,
-      order_type: form.value.order_type,
-      quantity: form.value.quantity,
-      leverage: form.value.leverage,
-      margin_type: form.value.margin_type,
-      reduce_only: false,
-    }
-    if (form.value.order_type === 'LIMIT') payload.price = form.value.price
-
-    const res = await api.placeTradingOrder(payload)
-    lastResult.value = res
+    const res = await api.placeBracketOrder(pendingPayload.value)
     if (!res.ok) {
-      submitError.value = res.error
-      return  // keep modal open so user can see error
+      const errs = []
+      if (!res.entry.ok) errs.push(`入场失败：${res.entry.error}`)
+      if (res.stop_loss && !res.stop_loss.ok) errs.push(`止损失败：${res.stop_loss.error}`)
+      if (res.take_profit && !res.take_profit.ok) errs.push(`止盈失败：${res.take_profit.error}`)
+      submitError.value = errs.join(' · ') || '未知错误'
+      return
     }
     confirmOpen.value = false
-    await reloadAccount()
+    await loadAccountAndOrders()
   } catch (e) {
     submitError.value = e.message
   } finally {
@@ -309,21 +642,76 @@ async function submitOrder() {
   }
 }
 
+async function onClosePosition(p) {
+  if (!confirm(`确认平掉 ${p.symbol} 的 ${p.position_amt > 0 ? '多头' : '空头'} 仓位（${Math.abs(p.position_amt)} 张）？`)) return
+  try {
+    const res = await api.closeTradingPosition(selectedCredentialId.value, p.symbol)
+    if (!res.ok) errorMsg.value = `平仓失败：${res.error}`
+    await loadAccountAndOrders()
+  } catch (e) {
+    errorMsg.value = e.message
+  }
+}
+
+async function onCancelOrder(o) {
+  if (!confirm(`确认取消 ${o.symbol} 的委托单 ${o.orderId}？`)) return
+  try {
+    await api.cancelOpenOrder(selectedCredentialId.value, o.symbol, o.orderId)
+    await loadAccountAndOrders()
+  } catch (e) {
+    errorMsg.value = e.message
+  }
+}
+
+// ---- refresh timer ----
+
+function resetCountdown() { countdown.value = refreshSec.value }
+function startRefresh() {
+  stopRefresh()
+  if (refreshSec.value <= 0) return
+  refreshTimer = setInterval(() => {
+    if (countdown.value > 0) countdown.value--
+    else if (!loading.value) loadAll()
+  }, 1000)
+}
+function stopRefresh() { if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null } }
+
+watch(refreshSec, () => { resetCountdown(); startRefresh() })
+watch([symbol, interval, limit, includeCurrent], () => { loadKlines() })
+
+// ---- formatting ----
+
 function fmt(n) {
   if (n == null || isNaN(n)) return '-'
   return Number(n).toLocaleString('en-US', { maximumFractionDigits: 4 })
 }
-
-function pnlSign(n) {
-  if (n == null || isNaN(n)) return ''
-  return n > 0 ? '+' : ''
+function pnlSign(n) { return n > 0 ? '+' : '' }
+function fmtTime(ms) {
+  if (!ms) return '-'
+  const d = new Date(Number(ms))
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getMonth() + 1}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+function catLabel(c) { return { single: '单根', double: '双根', triple: '三根' }[c] || c }
+function orderTypeLabel(t) {
+  return { MARKET: '市价', LIMIT: '限价', STOP_MARKET: '止损市价', TAKE_PROFIT_MARKET: '止盈市价', STOP: '止损限价', TAKE_PROFIT: '止盈限价' }[t] || t
 }
 
+// ---- lifecycle ----
+
 onMounted(async () => {
-  await reloadCredentials()
-  if (selectedCredentialId.value) {
-    await reloadAccount()
-  }
+  await loadCredentials()
+  await nextTick()
+  initChart()
+  await loadAll()
+  startRefresh()
+})
+
+onUnmounted(() => {
+  stopRefresh()
+  if (resizeObserver) resizeObserver.disconnect()
+  if (themeObserver) themeObserver.disconnect()
+  if (chart) { chart.remove(); chart = null }
 })
 </script>
 
@@ -335,183 +723,315 @@ onMounted(async () => {
 .empty-card h3 { margin-bottom: 8px; color: var(--text-primary); }
 .empty-card p { margin-bottom: 20px; color: var(--text-secondary); }
 
-.toolbar-card {
+.kline-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 18px;
+  gap: 14px 20px;
   padding: 18px 22px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
-
-.ctrl {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-}
+.ctrl { display: flex; align-items: center; gap: 10px; }
 .ctrl label {
   font-size: 12px;
   color: var(--text-secondary);
   font-weight: 500;
+  letter-spacing: 0.02em;
 }
-.ctrl select { min-width: 280px; }
+.ctrl.checkbox label {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  color: var(--text-primary); font-size: 13px;
+}
+.ctrl-spacer { flex: 1; }
+.symbol-input { width: 140px; }
+.interval-select { width: 100px; }
+.limit-input { width: 90px; }
+.refresh-select { width: 100px; }
 
+.countdown-text {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  min-width: 30px;
+  text-align: right;
+}
+.refresh-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+}
+.refresh-dot.loading { animation: pulse 0.8s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.3 } }
+
+.btn.btn-compact { padding: 8px 16px; font-size: 13px; }
+
+.level-ctrl { gap: 10px; }
+.level-chips { display: inline-flex; gap: 4px; }
+.level-chip {
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: inherit;
+}
+.level-chip:hover { color: var(--text-secondary); border-color: var(--text-tertiary); }
+.level-chip.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.cred-bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 22px;
+  margin-bottom: 14px;
+}
+.cred-bar .ctrl select { min-width: 280px; }
 .env-badge {
   font-size: 12px;
   font-weight: 600;
   padding: 4px 12px;
   border-radius: 20px;
 }
-.env-testnet {
-  background: var(--accent-subtle);
-  color: var(--accent);
+.env-testnet { background: var(--accent-subtle); color: var(--accent); }
+.env-mainnet { background: var(--danger-subtle); color: var(--danger); }
+
+.account-inline {
+  display: flex;
+  gap: 24px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }
-.env-mainnet {
+.account-inline strong {
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-left: 6px;
+}
+
+.error-bar {
   background: var(--danger-subtle);
   color: var(--danger);
-}
-
-.btn.btn-compact {
-  padding: 8px 16px;
+  padding: 12px 18px;
+  border-radius: var(--radius-md);
+  margin-bottom: 14px;
   font-size: 13px;
 }
 
-.account-row {
+.chart-card { padding: 12px; margin-bottom: 14px; }
+.chart-container { width: 100%; height: 460px; }
+
+.snapshot-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.snapshot-card { padding: 18px 22px; }
+.snapshot-card.live { border-left: 3px solid var(--accent); }
+.snapshot-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.snapshot-title { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
+.ohlc-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
-  margin-bottom: 18px;
-}
-.stat-card {
-  padding: 18px 20px;
-}
-.stat-label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
-  letter-spacing: 0.02em;
-}
-.stat-value {
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--text-primary);
+  gap: 6px 16px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
+.ohlc-grid > div { display: flex; align-items: baseline; gap: 8px; }
+.ohlc-label { font-size: 11px; color: var(--text-tertiary); font-weight: 600; }
+.clr-positive { color: var(--success); }
+.clr-negative { color: var(--danger); }
 
-.form-card {
-  margin-bottom: 18px;
-}
-.form-card h3 {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 18px;
-  color: var(--text-primary);
-}
-
-.form-grid {
+.main-row {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 18px 28px;
-  margin-bottom: 20px;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 14px;
 }
-.form-row {
+.trade-card { padding: 22px 24px; }
+.patterns-block {
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
-.form-row label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-
-.radio-group {
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 10px;
+  color: var(--text-primary);
   display: flex;
+  align-items: center;
   gap: 8px;
 }
-.radio-pill {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 10px 16px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg-primary);
+.section-count {
+  font-size: 11px;
+  background: var(--bg-tertiary);
   color: var(--text-secondary);
-  font-size: 13px;
-  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+.pattern-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  max-height: 440px;
+  overflow-y: auto;
+}
+.pattern-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-left: 3px solid transparent;
   transition: all var(--transition-fast);
 }
-.radio-pill input { display: none; }
-.radio-pill.active {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 500;
-}
-
-.form-actions {
+.pattern-card.dir-bullish { border-left-color: var(--success); }
+.pattern-card.dir-bearish { border-left-color: var(--danger); }
+.pattern-card.dir-neutral { border-left-color: var(--text-tertiary); }
+.pattern-icon { font-size: 18px; width: 24px; text-align: center; }
+.pattern-icon.dir-bullish { color: var(--success); }
+.pattern-icon.dir-bearish { color: var(--danger); }
+.pattern-icon.dir-neutral { color: var(--text-tertiary); }
+.pattern-body { flex: 1; min-width: 0; }
+.pattern-name {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 12px;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
 }
-.btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.pattern-name-zh { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+.pattern-name-en { font-size: 11px; color: var(--text-tertiary); }
+.pattern-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
 }
+.pattern-meta .badge { font-size: 11px; padding: 2px 7px; }
+.indices-chip { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 
-.result-line {
-  margin-top: 14px;
-  padding: 10px 14px;
-  border-radius: var(--radius-sm);
+.tabs-card { padding: 0; overflow: hidden; }
+.tabs-row {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  padding: 0 12px;
+}
+.tab-btn {
+  padding: 14px 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
   font-size: 13px;
-  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-.result-line.clr-positive { background: var(--success-subtle); }
-.result-line.clr-negative { background: var(--danger-subtle); }
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tab-count {
+  font-size: 11px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 1px 8px;
+  border-radius: 20px;
+}
+.tab-btn.active .tab-count {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
 
-.positions-card { padding: 22px 24px; }
-.positions-card h3 {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 14px;
-  color: var(--text-primary);
-}
-table {
+.tabs-card table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
 }
-thead th {
+.tabs-card thead th {
   text-align: left;
-  padding: 10px 14px;
+  padding: 12px 16px;
   color: var(--text-secondary);
   font-weight: 600;
-  font-size: 12px;
+  font-size: 11px;
   border-bottom: 1px solid var(--border);
+  letter-spacing: 0.03em;
 }
-tbody td {
-  padding: 10px 14px;
+.tabs-card tbody td {
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   font-variant-numeric: tabular-nums;
 }
+.tabs-card tbody tr:hover { background: var(--bg-tertiary); }
 .col-symbol { font-weight: 600; }
+.row-actions { text-align: right; display: flex; gap: 6px; justify-content: flex-end; }
+.btn-danger { color: var(--danger); }
+.btn-danger:hover { background: var(--danger-subtle); }
 
-.clr-positive { color: var(--success); }
-.clr-negative { color: var(--danger); }
+.tab-empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+.hist-toolbar {
+  display: flex;
+  gap: 10px;
+  padding: 14px 18px;
+  align-items: center;
+}
+.hist-input { width: 180px; }
+.hist-hint {
+  padding: 14px 18px 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  margin: 0;
+}
+.audit-err {
+  color: var(--danger);
+  font-size: 12px;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.env-tag {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+.env-tag.env-testnet { background: var(--accent-subtle); color: var(--accent); }
+.env-tag.env-mainnet { background: var(--danger-subtle); color: var(--danger); }
 
 /* ---- modal ---- */
 .modal-mask {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
   backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: flex; align-items: center; justify-content: center;
   z-index: 1000;
 }
 .modal-card {
@@ -520,7 +1040,7 @@ tbody td {
   border-radius: var(--radius-lg);
   padding: 26px 28px;
   width: 100%;
-  max-width: 440px;
+  max-width: 460px;
   box-shadow: var(--shadow-lg);
 }
 .modal-card h3 {
@@ -536,10 +1056,7 @@ tbody td {
   border-bottom: 1px solid var(--border);
 }
 .confirm-line:last-of-type { border-bottom: none; }
-.confirm-label {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
+.confirm-label { font-size: 13px; color: var(--text-secondary); }
 .confirm-value {
   font-size: 13px;
   color: var(--text-primary);
@@ -561,8 +1078,9 @@ tbody td {
   margin-top: 18px;
 }
 
-@media (max-width: 880px) {
-  .account-row { grid-template-columns: repeat(2, 1fr); }
-  .form-grid { grid-template-columns: 1fr; }
+@media (max-width: 1024px) {
+  .main-row { grid-template-columns: 1fr; }
+  .snapshot-row { grid-template-columns: 1fr; }
+  .account-inline { display: none; }
 }
 </style>

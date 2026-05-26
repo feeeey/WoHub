@@ -18,7 +18,7 @@ from trading import binance_client as bn
 from trading.binance_client import BinanceAPIError
 from trading.credentials import get_credential
 from trading.models import (
-    OrderRequest, OrderResult, Position, Balance,
+    OrderRequest, OrderResult, Position, Balance, BracketOrderResult,
 )
 
 
@@ -155,6 +155,145 @@ def place_order(credential_id: int, req: OrderRequest) -> OrderResult:
     )
     _record_order(credential_id, env, req, result)
     return result
+
+
+def _opposite_side(side: str) -> str:
+    return "SELL" if side == "BUY" else "BUY"
+
+
+def place_order_bracket(
+    credential_id: int,
+    req: OrderRequest,
+    stop_loss_price: float | None = None,
+    take_profit_price: float | None = None,
+) -> BracketOrderResult:
+    """Place an entry order with optional protection orders (SL + TP).
+
+    The protection orders are STOP_MARKET / TAKE_PROFIT_MARKET with
+    closePosition=true — when triggered they liquidate the full position at
+    market. This is the safest and most common bracket pattern.
+
+    If the entry fails, neither SL nor TP is attempted. If the entry succeeds
+    but SL or TP fails, the entry is NOT rolled back — the caller is told and
+    can place the missing protection manually.
+    """
+    entry = place_order(credential_id, req)
+    if not entry.ok:
+        return BracketOrderResult(ok=False, entry=entry)
+
+    if stop_loss_price is None and take_profit_price is None:
+        return BracketOrderResult(ok=True, entry=entry)
+
+    # Both SL and TP must close in the opposite direction of the entry.
+    close_side = _opposite_side(req.side)
+    env, api_key, secret = _resolve(credential_id)
+
+    sl_result: OrderResult | None = None
+    tp_result: OrderResult | None = None
+
+    if stop_loss_price is not None:
+        sl_req = OrderRequest(
+            symbol=req.symbol, side=close_side, order_type="STOP_MARKET",
+            quantity=req.quantity,  # ignored when closePosition=true, but keeps validator happy
+            leverage=req.leverage, margin_type=req.margin_type,
+        )
+        try:
+            raw = bn.place_order(
+                env, api_key, secret,
+                symbol=req.symbol, side=close_side, order_type="STOP_MARKET",
+                stop_price=stop_loss_price, close_position=True,
+            )
+            sl_result = OrderResult(
+                ok=True,
+                binance_order_id=str(raw.get("orderId", "")),
+                status=raw.get("status"),
+                raw=raw,
+            )
+        except BinanceAPIError as e:
+            sl_result = OrderResult(ok=False, error=f"stop_loss: {e}")
+        _record_order(credential_id, env, sl_req, sl_result)
+
+    if take_profit_price is not None:
+        tp_req = OrderRequest(
+            symbol=req.symbol, side=close_side, order_type="TAKE_PROFIT_MARKET",
+            quantity=req.quantity,
+            leverage=req.leverage, margin_type=req.margin_type,
+        )
+        try:
+            raw = bn.place_order(
+                env, api_key, secret,
+                symbol=req.symbol, side=close_side, order_type="TAKE_PROFIT_MARKET",
+                stop_price=take_profit_price, close_position=True,
+            )
+            tp_result = OrderResult(
+                ok=True,
+                binance_order_id=str(raw.get("orderId", "")),
+                status=raw.get("status"),
+                raw=raw,
+            )
+        except BinanceAPIError as e:
+            tp_result = OrderResult(ok=False, error=f"take_profit: {e}")
+        _record_order(credential_id, env, tp_req, tp_result)
+
+    overall = entry.ok and (sl_result is None or sl_result.ok) and (tp_result is None or tp_result.ok)
+    return BracketOrderResult(
+        ok=overall, entry=entry, stop_loss=sl_result, take_profit=tp_result,
+    )
+
+
+def close_position(credential_id: int, symbol: str) -> OrderResult:
+    """Close the position for `symbol` with a reduce-only market order in
+    the opposite direction. Returns an error result if no position exists."""
+    env, api_key, secret = _resolve(credential_id)
+    rows = bn.position_risk(env, api_key, secret, symbol=symbol.upper())
+    open_rows = [r for r in rows if float(r.get("positionAmt", 0)) != 0]
+    if not open_rows:
+        return OrderResult(ok=False, error=f"no open position on {symbol}")
+
+    # One-way mode: at most one row per symbol. Sum just in case.
+    total = sum(float(r["positionAmt"]) for r in open_rows)
+    side = "SELL" if total > 0 else "BUY"
+    qty = abs(total)
+
+    req = OrderRequest(
+        symbol=symbol.upper(), side=side, order_type="MARKET",
+        quantity=qty, reduce_only=True,
+    )
+    try:
+        raw = bn.place_order(
+            env, api_key, secret,
+            symbol=symbol.upper(), side=side, order_type="MARKET",
+            quantity=qty, reduce_only=True,
+        )
+        result = OrderResult(
+            ok=True,
+            binance_order_id=str(raw.get("orderId", "")),
+            status=raw.get("status"),
+            executed_qty=float(raw.get("executedQty", 0)),
+            avg_price=float(raw.get("avgPrice", 0)) or 0.0,
+            raw=raw,
+        )
+    except BinanceAPIError as e:
+        result = OrderResult(ok=False, error=str(e))
+    _record_order(credential_id, env, req, result)
+    return result
+
+
+def list_open_orders(credential_id: int, symbol: str | None = None) -> list[dict]:
+    env, api_key, secret = _resolve(credential_id)
+    return bn.open_orders(env, api_key, secret, symbol=symbol.upper() if symbol else None)
+
+
+def cancel_open_order(credential_id: int, symbol: str, order_id: int | str) -> dict:
+    env, api_key, secret = _resolve(credential_id)
+    return bn.cancel_order(env, api_key, secret, symbol.upper(), order_id)
+
+
+def list_binance_order_history(
+    credential_id: int, symbol: str, limit: int = 50,
+) -> list[dict]:
+    env, api_key, secret = _resolve(credential_id)
+    return bn.all_orders(env, api_key, secret, symbol.upper(), limit=limit)
 
 
 def list_recent_orders(limit: int = 50) -> list[dict]:

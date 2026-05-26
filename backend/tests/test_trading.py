@@ -359,6 +359,303 @@ async def test_api_credentials_create_and_list(client):
     assert "supersecret123" not in listed.text
 
 
+# ---------- bracket order ----------
+
+def test_bracket_order_with_sl_and_tp_places_three_orders(monkeypatch):
+    """A successful bracket = entry + SL + TP, all recorded."""
+    calls = []
+
+    def fake_margin(*a, **kw):
+        calls.append(("margin",))
+        return {}
+
+    def fake_lev(*a, **kw):
+        calls.append(("leverage",))
+        return {}
+
+    def fake_order(env, k, s, **kw):
+        calls.append((kw["order_type"], kw.get("side"),
+                      kw.get("stop_price"), kw.get("close_position")))
+        return {"orderId": 100 + len(calls), "status": "NEW"}
+
+    monkeypatch.setattr("trading.binance_client.set_margin_type", fake_margin)
+    monkeypatch.setattr("trading.binance_client.set_leverage", fake_lev)
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    req = OrderRequest(
+        symbol="BTCUSDT", side="BUY", order_type="MARKET",
+        quantity=0.001, leverage=10, margin_type="ISOLATED",
+    )
+    result = service.place_order_bracket(
+        cred_id, req,
+        stop_loss_price=65000.0,
+        take_profit_price=80000.0,
+    )
+
+    assert result.ok
+    assert result.entry.ok and result.entry.binance_order_id
+    assert result.stop_loss.ok and result.stop_loss.binance_order_id
+    assert result.take_profit.ok and result.take_profit.binance_order_id
+
+    # Verify the call sequence and details
+    types = [c[0] for c in calls if isinstance(c, tuple) and len(c) > 1]
+    assert "MARKET" in types
+    assert "STOP_MARKET" in types
+    assert "TAKE_PROFIT_MARKET" in types
+
+    # SL/TP should be SELL side (opposite of BUY entry) with closePosition=True
+    sl_call = next(c for c in calls if isinstance(c, tuple) and len(c) == 4 and c[0] == "STOP_MARKET")
+    tp_call = next(c for c in calls if isinstance(c, tuple) and len(c) == 4 and c[0] == "TAKE_PROFIT_MARKET")
+    assert sl_call[1] == "SELL"
+    assert sl_call[2] == 65000.0
+    assert sl_call[3] is True
+    assert tp_call[1] == "SELL"
+    assert tp_call[2] == 80000.0
+    assert tp_call[3] is True
+
+    # 3 orders persisted in audit log
+    orders = service.list_recent_orders(limit=10)
+    assert len(orders) == 3
+
+
+def test_bracket_short_sell_uses_buy_for_protection_orders(monkeypatch):
+    """A SHORT entry must have BUY-side SL/TP to close the position."""
+    captured = []
+
+    def fake_order(env, k, s, **kw):
+        captured.append(kw.get("side"))
+        return {"orderId": 1, "status": "NEW"}
+
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    service.place_order_bracket(
+        cred_id,
+        OrderRequest(symbol="BTCUSDT", side="SELL", order_type="MARKET", quantity=0.001),
+        stop_loss_price=80000.0,
+        take_profit_price=65000.0,
+    )
+    # Entry is SELL; SL and TP must be BUY
+    assert captured[0] == "SELL"   # entry
+    assert captured[1] == "BUY"    # SL
+    assert captured[2] == "BUY"    # TP
+
+
+def test_bracket_without_sl_tp_only_places_entry(monkeypatch):
+    """Bracket without SL/TP is just the entry."""
+    calls = []
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+
+    def fake_order(env, k, s, **kw):
+        calls.append(kw.get("order_type"))
+        return {"orderId": 1, "status": "FILLED"}
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order_bracket(
+        cred_id,
+        OrderRequest(symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001),
+    )
+    assert result.ok
+    assert result.entry.ok
+    assert result.stop_loss is None
+    assert result.take_profit is None
+    assert calls == ["MARKET"]   # only the entry
+
+
+def test_bracket_entry_failure_skips_sl_tp(monkeypatch):
+    """If the entry fails, no SL/TP attempt is made."""
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+    calls = []
+
+    def fake_order(env, k, s, **kw):
+        calls.append(kw.get("order_type"))
+        raise BinanceAPIError(code=-2010, msg="Insufficient margin.", http_status=400)
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order_bracket(
+        cred_id,
+        OrderRequest(symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001),
+        stop_loss_price=65000.0,
+        take_profit_price=80000.0,
+    )
+    assert not result.ok
+    assert not result.entry.ok
+    assert result.stop_loss is None
+    assert result.take_profit is None
+    # Only the entry was attempted
+    assert calls == ["MARKET"]
+
+
+def test_bracket_partial_failure_reports_sl_error_but_keeps_entry(monkeypatch):
+    """Entry succeeds, SL fails — entry should NOT be undone."""
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+
+    state = {"count": 0}
+
+    def fake_order(env, k, s, **kw):
+        state["count"] += 1
+        # 1st call (MARKET entry) succeeds; 2nd (STOP_MARKET) fails; 3rd (TP) succeeds
+        if kw.get("order_type") == "STOP_MARKET":
+            raise BinanceAPIError(code=-1111, msg="Precision over the maximum.", http_status=400)
+        return {"orderId": state["count"], "status": "NEW"}
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order_bracket(
+        cred_id,
+        OrderRequest(symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001),
+        stop_loss_price=65000.0,
+        take_profit_price=80000.0,
+    )
+    assert not result.ok                # overall failure
+    assert result.entry.ok              # but entry succeeded
+    assert result.stop_loss and not result.stop_loss.ok
+    assert "Precision" in result.stop_loss.error
+    assert result.take_profit and result.take_profit.ok  # TP attempt still made
+
+
+# ---------- close_position ----------
+
+def test_close_position_long_places_opposite_market_sell(monkeypatch):
+    """A long position is closed with a reduce-only SELL market order."""
+    captured = {}
+
+    def fake_pos(env, k, s, symbol=None):
+        return [{"symbol": "BTCUSDT", "positionAmt": "0.005", "entryPrice": "70000"}]
+
+    def fake_order(env, k, s, **kw):
+        captured.update(kw)
+        return {"orderId": 999, "status": "FILLED", "executedQty": "0.005", "avgPrice": "71000"}
+
+    monkeypatch.setattr("trading.binance_client.position_risk", fake_pos)
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.close_position(cred_id, "BTCUSDT")
+    assert result.ok
+    assert result.binance_order_id == "999"
+    assert captured["side"] == "SELL"
+    assert captured["quantity"] == 0.005
+    assert captured["reduce_only"] is True
+    assert captured["order_type"] == "MARKET"
+
+
+def test_close_position_short_places_opposite_market_buy(monkeypatch):
+    def fake_pos(env, k, s, symbol=None):
+        return [{"symbol": "BTCUSDT", "positionAmt": "-0.003", "entryPrice": "70000"}]
+
+    captured = {}
+    def fake_order(env, k, s, **kw):
+        captured.update(kw)
+        return {"orderId": 1, "status": "FILLED"}
+
+    monkeypatch.setattr("trading.binance_client.position_risk", fake_pos)
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    service.close_position(cred_id, "BTCUSDT")
+    assert captured["side"] == "BUY"
+    assert captured["quantity"] == 0.003
+
+
+def test_close_position_returns_error_when_no_position(monkeypatch):
+    def fake_pos(env, k, s, symbol=None):
+        # Binance returns a row even when no position — positionAmt is "0.000"
+        return [{"symbol": "BTCUSDT", "positionAmt": "0", "entryPrice": "0"}]
+
+    monkeypatch.setattr("trading.binance_client.position_risk", fake_pos)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.close_position(cred_id, "BTCUSDT")
+    assert not result.ok
+    assert "no open position" in result.error
+
+
+# ---------- open orders / cancel ----------
+
+def test_list_open_orders_passes_uppercase_symbol(monkeypatch):
+    captured = {}
+
+    def fake(env, k, s, symbol=None):
+        captured["symbol"] = symbol
+        return [{"orderId": 1, "symbol": symbol, "status": "NEW"}]
+
+    monkeypatch.setattr("trading.binance_client.open_orders", fake)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    rows = service.list_open_orders(cred_id, symbol="btcusdt")
+    assert captured["symbol"] == "BTCUSDT"
+    assert len(rows) == 1
+
+
+def test_cancel_open_order(monkeypatch):
+    captured = {}
+
+    def fake(env, k, s, symbol, order_id):
+        captured["symbol"] = symbol
+        captured["order_id"] = order_id
+        return {"orderId": order_id, "status": "CANCELED"}
+
+    monkeypatch.setattr("trading.binance_client.cancel_order", fake)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    res = service.cancel_open_order(cred_id, "btcusdt", 12345)
+    assert captured["symbol"] == "BTCUSDT"
+    assert captured["order_id"] == 12345
+    assert res["status"] == "CANCELED"
+
+
+# ---------- binance_client place_order extended types ----------
+
+def test_place_order_stop_market_with_close_position(monkeypatch):
+    """STOP_MARKET + close_position=True omits quantity per Binance docs."""
+    from trading.binance_client import place_order as bn_place
+
+    captured = {}
+
+    def fake_fetch(method, url, **kwargs):
+        captured["url"] = url
+        r = _resp(200, {"orderId": 1, "status": "NEW"})
+        r.raise_for_status()
+        return r
+
+    monkeypatch.setattr("trading.binance_client.fetch_with_fallback", fake_fetch)
+
+    bn_place(
+        "testnet", "K", "S",
+        symbol="BTCUSDT", side="SELL", order_type="STOP_MARKET",
+        stop_price=65000.0, close_position=True,
+    )
+    assert "type=STOP_MARKET" in captured["url"]
+    assert "stopPrice=65000.0" in captured["url"]
+    assert "closePosition=true" in captured["url"]
+    # quantity must NOT be in the request (Binance forbids it with closePosition)
+    assert "quantity=" not in captured["url"]
+
+
+def test_place_order_stop_market_requires_stop_price():
+    from trading.binance_client import place_order as bn_place
+    with pytest.raises(ValueError, match="stop_price"):
+        bn_place(
+            "testnet", "K", "S",
+            symbol="BTCUSDT", side="SELL", order_type="STOP_MARKET",
+            close_position=True,
+        )
+
+
+# ---------- HTTP API ----------
+
 @pytest.mark.asyncio
 async def test_api_order_validation_rejects_limit_without_price(client):
     await client.post("/api/auth/login", data={"password": "testpass"})

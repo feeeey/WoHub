@@ -28,6 +28,16 @@ def is_authenticated(session: Optional[str] = Cookie(None)) -> bool:
     return _verify_session_token(session)
 
 
+def require_auth(session: Optional[str] = Cookie(None)) -> None:
+    """FastAPI dependency that rejects unauthenticated requests with 401.
+
+    Attach to protected routers via `dependencies=[Depends(require_auth)]`.
+    Reuses the same session-cookie verification as is_authenticated().
+    """
+    if not is_authenticated(session):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+
 @router.post("/login")
 def login(response: Response, password: str = Form(...)):
     if not hmac.compare_digest(password, settings.app_password):

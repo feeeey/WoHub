@@ -11,7 +11,7 @@ from typing import Any
 from klines.structure import StructurePoint, LONG, SHORT
 
 
-@dataclass
+@dataclass(frozen=True)
 class SymbolFilters:
     tick_size: float
     step_size: float
@@ -93,20 +93,25 @@ def compute_plan(
     if direction not in (LONG, SHORT):
         raise ValueError(f"direction must be 'long' or 'short', got {direction!r}")
 
+    if leverage <= 0:
+        raise ValueError(f"leverage must be >= 1, got {leverage!r}")
+
     warnings: list[str] = []
     structure_found = structure is not None
     struct_dict = structure.to_dict() if structure else None
 
     # ---- stop price ----
     if direction == LONG:
-        base = structure.price if structure_found else entry_price
-        raw_stop = (base - atr_mult * atr_value) if structure_found \
-            else (entry_price - atr_fallback_mult * atr_value)
+        if structure_found:
+            raw_stop = structure.price - atr_mult * atr_value
+        else:
+            raw_stop = entry_price - atr_fallback_mult * atr_value
         stop_price = _round_step(raw_stop, filters.tick_size, "floor")
     else:  # SHORT
-        base = structure.price if structure_found else entry_price
-        raw_stop = (base + atr_mult * atr_value) if structure_found \
-            else (entry_price + atr_fallback_mult * atr_value)
+        if structure_found:
+            raw_stop = structure.price + atr_mult * atr_value
+        else:
+            raw_stop = entry_price + atr_fallback_mult * atr_value
         stop_price = _round_step(raw_stop, filters.tick_size, "ceil")
     if not structure_found:
         warnings.append("未找到结构，已用 ATR 兜底止损")
@@ -117,6 +122,14 @@ def compute_plan(
         return PositionPlan(
             structure_found, struct_dict, atr_value, entry_price, stop_price,
             0.0, 0.0, rr, risk_pct, 0.0, equity, 0.0, 0.0, 0.0, False, warnings,
+        )
+
+    if (direction == LONG and stop_price >= entry_price) or \
+       (direction == SHORT and stop_price <= entry_price):
+        warnings.append("止损价位于入场价错误一侧，计划无效")
+        return PositionPlan(
+            structure_found, struct_dict, atr_value, entry_price, stop_price,
+            stop_distance, 0.0, rr, risk_pct, 0.0, equity, 0.0, 0.0, 0.0, False, warnings,
         )
 
     # ---- take profit (fixed R:R) ----
@@ -131,14 +144,15 @@ def compute_plan(
     quantity = _round_step(risk_amount / stop_distance, filters.step_size, "floor")
 
     feasible = True
+    notional = quantity * entry_price
     if quantity <= 0 or quantity < filters.min_qty:
         feasible = False
         warnings.append(f"数量 {quantity} 低于最小下单量 {filters.min_qty}")
-    notional = quantity * entry_price
-    if notional < filters.min_notional:
-        feasible = False
-        warnings.append(f"名义价值 {notional:.2f} 低于最小 {filters.min_notional}")
-    required_margin = notional / leverage if leverage else 0.0
+    else:
+        if notional < filters.min_notional:
+            feasible = False
+            warnings.append(f"名义价值 {notional:.2f} 低于最小 {filters.min_notional}")
+    required_margin = notional / leverage
     if required_margin > available_balance:
         feasible = False
         warnings.append(

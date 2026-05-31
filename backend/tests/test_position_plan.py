@@ -1,7 +1,9 @@
 import pytest
 from trading.position_plan import (
     SymbolFilters, parse_filters, _round_step,
+    compute_plan, PositionPlan,
 )
+from klines.structure import StructurePoint, LONG, SHORT
 
 
 def _fake_info(symbol="BTCUSDT", notional_type="MIN_NOTIONAL"):
@@ -13,6 +15,9 @@ def _fake_info(symbol="BTCUSDT", notional_type="MIN_NOTIONAL"):
             {"filterType": notional_type, "notional": "5"},
         ],
     }]}
+
+
+FILTERS = SymbolFilters(tick_size=0.1, step_size=0.001, min_qty=0.001, min_notional=5.0)
 
 
 def test_parse_filters_extracts_all_fields():
@@ -39,12 +44,6 @@ def test_round_step_floor_ceil_nearest():
 
 def test_round_step_zero_step_is_passthrough():
     assert _round_step(123.456, 0, "floor") == 123.456
-
-
-from trading.position_plan import compute_plan, PositionPlan
-from klines.structure import StructurePoint, LONG, SHORT
-
-FILTERS = SymbolFilters(tick_size=0.1, step_size=0.001, min_qty=0.001, min_notional=5.0)
 
 
 def test_compute_long_with_structure():
@@ -135,3 +134,27 @@ def test_compute_plan_to_dict_shape():
                 "stop_distance", "take_profit_price", "rr", "risk_pct", "risk_amount",
                 "equity", "quantity", "notional", "required_margin", "feasible", "warnings"):
         assert key in d
+
+
+def test_compute_plan_invalid_direction_raises():
+    with pytest.raises(ValueError, match="direction"):
+        compute_plan(direction="sideways", entry_price=100.0, structure=None,
+                     atr_value=2.0, equity=1000.0, available_balance=1000.0,
+                     leverage=10, filters=FILTERS)
+
+
+def test_compute_plan_zero_leverage_raises():
+    with pytest.raises(ValueError, match="leverage"):
+        compute_plan(direction=LONG, entry_price=100.0,
+                     structure=StructurePoint(95.0, 6, 0, 3), atr_value=2.0,
+                     equity=1000.0, available_balance=1000.0, leverage=0, filters=FILTERS)
+
+
+def test_compute_plan_stop_wrong_side_is_infeasible():
+    # structure ABOVE entry for a long -> stop ends up >= entry -> infeasible
+    plan = compute_plan(direction=LONG, entry_price=100.0,
+                        structure=StructurePoint(102.0, 6, 0, 3), atr_value=2.0,
+                        equity=10000.0, available_balance=10000.0, leverage=10,
+                        filters=FILTERS, atr_mult=0.3)
+    assert plan.feasible is False
+    assert any("错误一侧" in w for w in plan.warnings)

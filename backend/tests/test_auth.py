@@ -1,4 +1,7 @@
 import pytest
+from fastapi import HTTPException
+
+from auth import require_auth, _create_session_token
 
 
 @pytest.mark.asyncio
@@ -60,10 +63,6 @@ async def test_logout(client):
 
     status = await client.get("/api/auth/status")
     assert status.json()["authenticated"] is False
-
-
-from auth import require_auth, _create_session_token
-from fastapi import HTTPException
 
 
 def test_require_auth_rejects_missing_session():

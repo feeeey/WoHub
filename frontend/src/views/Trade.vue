@@ -141,8 +141,8 @@
             <div class="plan-stat"><label>止损</label><b>{{ planResult.stop_price }}</b></div>
             <div class="plan-stat"><label>止盈</label><b>{{ planResult.take_profit_price }}</b></div>
             <div class="plan-stat"><label>数量</label><b>{{ planResult.quantity }}</b></div>
-            <div class="plan-stat"><label>风险额</label><b>{{ planResult.risk_amount.toFixed(2) }}</b></div>
-            <div class="plan-stat"><label>所需保证金</label><b>{{ planResult.required_margin.toFixed(2) }}</b></div>
+            <div class="plan-stat"><label>风险额</label><b>{{ Number(planResult.risk_amount).toFixed(2) }}</b></div>
+            <div class="plan-stat"><label>所需保证金</label><b>{{ Number(planResult.required_margin).toFixed(2) }}</b></div>
             <div v-for="(w, i) in planResult.warnings" :key="i" class="plan-warn">⚠ {{ w }}</div>
             <div v-if="!planResult.feasible" class="plan-warn">该方案不可行，请调整参数后再下单</div>
           </div>
@@ -443,6 +443,7 @@ function readTheme() {
     grid: get('--border', 'rgba(255,255,255,0.07)'),
     up: get('--success', '#66b366'),
     down: get('--danger', '#d96a6a'),
+    warning: get('--warning', '#cca44d'),
   }
 }
 
@@ -569,7 +570,7 @@ function redrawPriceLines() {
   if (planResult.value?.structure_found && planResult.value.structure) {
     priceLines.push(candleSeries.createPriceLine({
       price: planResult.value.structure.price,
-      color: '#cca44d',            // --warning; charts can't read CSS vars directly
+      color: t.warning,
       lineWidth: 1,
       lineStyle: 2,                // dashed
       axisLabelVisible: true,
@@ -611,6 +612,8 @@ async function loadKlines() {
 
 async function loadAccountAndOrders() {
   if (!selectedCredentialId.value) return
+  planResult.value = null
+  planError.value = ''
   const promises = [
     api.getTradingAccount(selectedCredentialId.value).then(d => { account.value = d }).catch(() => { account.value = null }),
     api.getOpenOrders(selectedCredentialId.value).then(d => { openOrders.value = d.orders || [] }).catch(() => { openOrders.value = [] }),
@@ -732,7 +735,7 @@ function startRefresh() {
 function stopRefresh() { if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null } }
 
 watch(refreshSec, () => { resetCountdown(); startRefresh() })
-watch([symbol, interval, limit, includeCurrent], () => { loadKlines() })
+watch([symbol, interval, limit, includeCurrent], () => { planResult.value = null; planError.value = ''; loadKlines() })
 
 // ---- formatting ----
 

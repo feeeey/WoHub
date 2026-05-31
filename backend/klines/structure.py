@@ -15,7 +15,7 @@ SHORT = "short"
 @dataclass
 class StructurePoint:
     price: float        # the pivot's low (long) or high (short)
-    bar_index: int      # index into the closed-candle list
+    bar_index: int      # index into the closed-candle slice (_closed(candles))
     bar_time: int       # open_time of the pivot bar
     age_bars: int       # bars back from the last closed candle
 
@@ -88,6 +88,8 @@ def find_pivot(
 
 def atr(candles: list[Candle], period: int = 14) -> float | None:
     """Wilder's ATR over closed candles. None if insufficient data."""
+    if period < 1:
+        raise ValueError("period must be >= 1")
     closed = _closed(candles)
     if len(closed) < period + 1:
         return None

@@ -33,6 +33,11 @@ def test_long_skips_pivots_at_or_above_ref():
     assert find_pivot(_long_series(), LONG, ref_price=90, k=2) is None
 
 
+def test_short_skips_pivots_at_or_below_ref():
+    # ref above every pivot high -> nothing qualifies
+    assert find_pivot(_short_series(), SHORT, ref_price=110, k=2) is None
+
+
 def test_short_returns_nearest_confirmed_pivot_high_above_ref():
     sp = find_pivot(_short_series(), SHORT, ref_price=91, k=2)
     assert sp.price == 105
@@ -73,6 +78,13 @@ def test_atr_constant_true_range_equals_that_range():
 def test_atr_insufficient_data_returns_none():
     candles = [mk(100, 110, t=i) for i in range(3)]
     assert atr(candles, period=14) is None
+
+
+def test_atr_invalid_period_raises():
+    import pytest
+    candles = [mk(100, 110, t=i) for i in range(20)]
+    with pytest.raises(ValueError):
+        atr(candles, period=0)
 
 
 def test_atr_ignores_unclosed_tail():

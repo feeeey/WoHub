@@ -183,6 +183,9 @@ function buildPlanRequest() {
 
 // Called by the parent (Trade.vue) after /trading/plan returns, to fill the form.
 function applyPlan(plan) {
+  // Never auto-fill the order form from an infeasible plan — the summary panel
+  // surfaces the warnings; filling unsafe SL/TP/qty here could be submitted blindly.
+  if (!plan || plan.feasible === false) return
   if (plan.quantity && plan.quantity > 0) form.value.quantity = plan.quantity
   if (plan.stop_price && plan.stop_price > 0) {
     useSL.value = true

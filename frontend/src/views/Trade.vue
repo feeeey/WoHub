@@ -579,6 +579,13 @@ function redrawPriceLines() {
   }
 }
 
+// ---- helpers ----
+
+function normalizeSymbol(s) {
+  const v = (s || '').trim().toUpperCase()
+  return v.endsWith('USDT') ? v : v + 'USDT'
+}
+
 // ---- data loading ----
 
 async function loadCredentials() {
@@ -596,9 +603,7 @@ async function loadKlines() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const sym = symbol.value.toUpperCase().endsWith('USDT')
-      ? symbol.value.toUpperCase()
-      : symbol.value.toUpperCase() + 'USDT'
+    const sym = normalizeSymbol(symbol.value)
     klPayload.value = await api.getKlines(sym, interval.value, limit.value, includeCurrent.value)
     await nextTick()
     updateChart()
@@ -658,7 +663,7 @@ async function onComputePlan(req) {
   try {
     const plan = await api.buildTradingPlan({
       credential_id: selectedCredentialId.value,
-      symbol: symbol.value,
+      symbol: normalizeSymbol(symbol.value),
       interval: interval.value,
       ...req,
     })

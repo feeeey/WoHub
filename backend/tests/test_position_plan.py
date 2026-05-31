@@ -158,3 +158,57 @@ def test_compute_plan_stop_wrong_side_is_infeasible():
                         filters=FILTERS, atr_mult=0.3)
     assert plan.feasible is False
     assert any("错误一侧" in w for w in plan.warnings)
+
+
+# ---- Task 5: build_position_plan orchestrator ----
+
+from klines.models import Candle
+from trading import service
+
+
+def _candle(close, t=0, closed=True):
+    return Candle(open_time=t, close_time=t + 1, open=close, high=close + 1,
+                  low=close - 1, close=close, volume=1.0, closed=closed)
+
+
+def test_build_position_plan_orchestrates(monkeypatch):
+    monkeypatch.setattr(service, "_resolve", lambda cid: ("testnet", "key", "secret"))
+    # last candle close is the MARKET entry price
+    monkeypatch.setattr(service, "fetch_klines",
+                        lambda *a, **k: [_candle(100.0, t=i) for i in range(30)])
+    monkeypatch.setattr(service, "compute_atr", lambda candles, period: 2.0)
+    monkeypatch.setattr(service, "find_pivot",
+                        lambda *a, **k: StructurePoint(price=95.0, bar_index=6,
+                                                       bar_time=0, age_bars=3))
+    monkeypatch.setattr(service, "get_account", lambda cid: {
+        "total_wallet_balance": 10000.0, "total_unrealized_pnl": 0.0,
+        "available_balance": 10000.0,
+    })
+    monkeypatch.setattr(service.bn, "exchange_info", lambda env, key: {
+        "symbols": [{"symbol": "BTCUSDT", "filters": [
+            {"filterType": "PRICE_FILTER", "tickSize": "0.10"},
+            {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001"},
+            {"filterType": "MIN_NOTIONAL", "notional": "5"},
+        ]}]})
+
+    out = service.build_position_plan(
+        credential_id=1, symbol="btcusdt", interval="4h", direction="long",
+        order_type="MARKET",
+    )
+    assert out["symbol"] == "BTCUSDT"
+    assert out["interval"] == "4h"
+    assert out["direction"] == "long"
+    assert out["entry_price"] == pytest.approx(100.0)
+    assert out["stop_price"] == pytest.approx(94.4)
+    assert out["feasible"] is True
+
+
+def test_build_position_plan_limit_requires_entry_price(monkeypatch):
+    monkeypatch.setattr(service, "_resolve", lambda cid: ("testnet", "key", "secret"))
+    monkeypatch.setattr(service, "fetch_klines",
+                        lambda *a, **k: [_candle(100.0, t=i) for i in range(30)])
+    monkeypatch.setattr(service, "compute_atr", lambda candles, period: 2.0)
+    with pytest.raises(ValueError):
+        service.build_position_plan(
+            credential_id=1, symbol="BTCUSDT", interval="4h", direction="long",
+            order_type="LIMIT", entry_price=None)

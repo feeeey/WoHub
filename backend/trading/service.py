@@ -21,6 +21,10 @@ from trading.models import (
     OrderRequest, OrderResult, Position, Balance, BracketOrderResult,
 )
 
+from klines.fetcher import fetch_klines
+from klines.structure import find_pivot, atr as compute_atr
+from trading import position_plan as pp
+
 
 def _resolve(credential_id: int) -> tuple[str, str, str]:
     """Decrypt credential by id. Raises ValueError if missing/disabled."""
@@ -311,3 +315,60 @@ def list_recent_orders(limit: int = 50) -> list[dict]:
         return [dict(r) for r in rows]
     finally:
         db.close()
+
+
+def build_position_plan(
+    *,
+    credential_id: int,
+    symbol: str,
+    interval: str,
+    direction: str,
+    order_type: str,
+    entry_price: float | None = None,
+    risk_pct: float = 1.0,
+    rr: float = 1.5,
+    atr_mult: float = 0.3,
+    atr_period: int = 14,
+    fractal_k: int = 2,
+    lookback: int = 150,
+    leverage: int = 10,
+) -> dict[str, Any]:
+    """Read-only: fetch klines + account + exchangeInfo, find the structural
+    pivot, and compute an ATR-buffered stop, R:R take-profit and risk-defined
+    position size. Places NO order."""
+    symbol = symbol.upper()
+
+    need = lookback + atr_period + 2 * fractal_k + 5
+    candles = fetch_klines(symbol, interval, limit=max(need, 50))
+    if not candles:
+        raise ValueError(f"no klines for {symbol} {interval}")
+
+    if order_type == "LIMIT":
+        if not entry_price or entry_price <= 0:
+            raise ValueError("LIMIT 单需提供有效的 entry_price")
+        entry = float(entry_price)
+    else:
+        entry = candles[-1].close  # live/last price
+
+    atr_value = compute_atr(candles, atr_period)
+    if atr_value is None:
+        raise ValueError("K线不足，无法计算 ATR")
+
+    structure = find_pivot(candles, direction, entry, k=fractal_k, lookback=lookback)
+
+    acct = get_account(credential_id)
+    equity = acct["total_wallet_balance"] + acct["total_unrealized_pnl"]
+    available = acct["available_balance"]
+
+    env, api_key, _secret = _resolve(credential_id)
+    filters = pp.parse_filters(bn.exchange_info(env, api_key), symbol)
+
+    plan = pp.compute_plan(
+        direction=direction, entry_price=entry, structure=structure,
+        atr_value=atr_value, equity=equity, available_balance=available,
+        leverage=leverage, filters=filters, risk_pct=risk_pct, rr=rr,
+        atr_mult=atr_mult,
+    )
+    out = plan.to_dict()
+    out.update({"symbol": symbol, "interval": interval, "direction": direction})
+    return out

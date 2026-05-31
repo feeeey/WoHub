@@ -298,4 +298,8 @@ export const api = {
   async getBinanceOrderHistory(credentialId, symbol, limit = 50) {
     return request(`/trading/history/${credentialId}?symbol=${encodeURIComponent(symbol)}&limit=${limit}`)
   },
+
+  async buildTradingPlan(data) {
+    return request('/trading/plan', { method: 'POST', body: JSON.stringify(data) })
+  },
 }

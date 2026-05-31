@@ -219,3 +219,51 @@ def test_build_position_plan_limit_requires_entry_price(monkeypatch):
         service.build_position_plan(
             credential_id=1, symbol="BTCUSDT", interval="4h", direction="long",
             order_type="LIMIT", entry_price=None)
+
+
+# ---- Task 6: POST /trading/plan endpoint ----
+
+from api import trading as trading_api
+
+
+def test_plan_route_calls_service(monkeypatch):
+    captured = {}
+
+    def fake_build(**kwargs):
+        captured.update(kwargs)
+        return {"ok": "canned", "symbol": kwargs["symbol"]}
+
+    monkeypatch.setattr(trading_api, "build_position_plan", fake_build)
+    body = trading_api.PlanBody(
+        credential_id=1, symbol="BTCUSDT", interval="4h",
+        direction="long", order_type="MARKET",
+    )
+    out = trading_api.plan(body)
+    assert out["ok"] == "canned"
+    assert captured["credential_id"] == 1
+    assert captured["direction"] == "long"
+
+
+def test_plan_body_rejects_bad_direction():
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        trading_api.PlanBody(
+            credential_id=1, symbol="BTCUSDT", interval="4h",
+            direction="sideways", order_type="MARKET",
+        )
+
+
+def test_plan_route_maps_valueerror_to_http_400(monkeypatch):
+    from fastapi import HTTPException
+
+    def boom(**kwargs):
+        raise ValueError("LIMIT 单需提供有效的 entry_price")
+
+    monkeypatch.setattr(trading_api, "build_position_plan", boom)
+    body = trading_api.PlanBody(
+        credential_id=1, symbol="BTCUSDT", interval="4h",
+        direction="long", order_type="LIMIT",
+    )
+    with pytest.raises(HTTPException) as ei:
+        trading_api.plan(body)
+    assert ei.value.status_code == 400

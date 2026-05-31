@@ -15,7 +15,7 @@ from trading.credentials import (
 from trading.service import (
     test_credential, get_account, place_order, list_recent_orders,
     place_order_bracket, close_position, list_open_orders,
-    cancel_open_order, list_binance_order_history,
+    cancel_open_order, list_binance_order_history, build_position_plan,
 )
 from trading.models import OrderRequest
 
@@ -224,3 +224,38 @@ def binance_order_history(credential_id: int, symbol: str, limit: int = 50):
 @router.get("/orders")
 def orders(limit: int = 50):
     return {"orders": list_recent_orders(limit=max(1, min(500, limit)))}
+
+
+# ---------- position plan (read-only: structure stop + risk sizing) ----------
+
+class PlanBody(BaseModel):
+    credential_id: int
+    symbol: str = Field(min_length=1, max_length=20)
+    interval: str = Field(min_length=1, max_length=8)
+    direction: str = Field(pattern="^(long|short)$")
+    order_type: str = Field(pattern="^(MARKET|LIMIT)$")
+    entry_price: float | None = Field(default=None, gt=0)
+    risk_pct: float = Field(default=1.0, gt=0, le=100)
+    rr: float = Field(default=1.5, gt=0, le=100)
+    atr_mult: float = Field(default=0.3, ge=0, le=50)
+    atr_period: int = Field(default=14, ge=1, le=1000)
+    fractal_k: int = Field(default=2, ge=1, le=50)
+    lookback: int = Field(default=150, ge=10, le=1500)
+    leverage: int = Field(default=10, ge=1, le=125)
+
+
+@router.post("/plan")
+def plan(body: PlanBody):
+    try:
+        return build_position_plan(
+            credential_id=body.credential_id, symbol=body.symbol,
+            interval=body.interval, direction=body.direction,
+            order_type=body.order_type, entry_price=body.entry_price,
+            risk_pct=body.risk_pct, rr=body.rr, atr_mult=body.atr_mult,
+            atr_period=body.atr_period, fractal_k=body.fractal_k,
+            lookback=body.lookback, leverage=body.leverage,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

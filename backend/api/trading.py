@@ -1,9 +1,9 @@
 """
 Trading endpoints — Binance USDT-M perpetual.
 
-All endpoints require the standard cookie-session auth (handled at the router
-level via the existing dependency wiring). Sensitive material (api_secret) is
-never echoed back in any response.
+All endpoints require cookie-session auth, enforced by the require_auth
+dependency on the protected router group in api/__init__.py. Sensitive material
+(api_secret) is never echoed back in any response.
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field

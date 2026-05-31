@@ -54,6 +54,22 @@
       </div>
     </div>
 
+    <!-- smart plan: structure stop + risk-defined sizing -->
+    <div class="plan-row">
+      <div class="plan-inputs">
+        <label>风险% <input v-model.number="planParams.risk_pct" type="number" step="0.1" min="0.1" /></label>
+        <label>盈亏比 <input v-model.number="planParams.rr" type="number" step="0.1" min="0.1" /></label>
+        <label>ATR× <input v-model.number="planParams.atr_mult" type="number" step="0.05" min="0" /></label>
+      </div>
+      <button
+        class="btn btn-secondary plan-btn"
+        :disabled="!credentialId || !symbol || computing"
+        @click="emit('compute-plan', buildPlanRequest())"
+      >
+        {{ computing ? '计算中…' : '📐 智能计算（结构止损+仓位）' }}
+      </button>
+    </div>
+
     <!-- SL / TP -->
     <div class="protection-row">
       <label class="check-row">
@@ -101,9 +117,12 @@ const props = defineProps({
   symbol: { type: String, required: true },
   credentialId: { type: Number, default: null },
   submitting: { type: Boolean, default: false },
+  computing: { type: Boolean, default: false },   // NEW: plan request in flight
 })
 
-const emit = defineEmits(['open-confirm'])
+const emit = defineEmits(['open-confirm', 'compute-plan'])   // add 'compute-plan'
+
+const planParams = ref({ risk_pct: 1.0, rr: 1.5, atr_mult: 0.3 })
 
 const form = ref({
   side: 'BUY',
@@ -148,6 +167,34 @@ function buildPayload() {
     take_profit_price: useTP.value ? f.take_profit_price : null,
   }
 }
+
+function buildPlanRequest() {
+  const f = form.value
+  return {
+    direction: f.side === 'BUY' ? 'long' : 'short',
+    order_type: f.order_type,
+    entry_price: f.order_type === 'LIMIT' ? f.price : null,
+    leverage: f.leverage,
+    risk_pct: planParams.value.risk_pct,
+    rr: planParams.value.rr,
+    atr_mult: planParams.value.atr_mult,
+  }
+}
+
+// Called by the parent (Trade.vue) after /trading/plan returns, to fill the form.
+function applyPlan(plan) {
+  if (plan.quantity && plan.quantity > 0) form.value.quantity = plan.quantity
+  if (plan.stop_price && plan.stop_price > 0) {
+    useSL.value = true
+    form.value.stop_loss_price = plan.stop_price
+  }
+  if (plan.take_profit_price && plan.take_profit_price > 0) {
+    useTP.value = true
+    form.value.take_profit_price = plan.take_profit_price
+  }
+}
+
+defineExpose({ applyPlan })
 </script>
 
 <style scoped>
@@ -271,4 +318,33 @@ function buildPayload() {
   cursor: not-allowed;
   filter: none;
 }
+
+.plan-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+.plan-inputs {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.plan-inputs label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.plan-inputs input {
+  width: 72px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+.plan-btn { width: 100%; font-weight: 600; }
 </style>

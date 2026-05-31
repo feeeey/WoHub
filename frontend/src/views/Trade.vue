@@ -127,11 +127,26 @@
       <div class="main-row">
         <div class="card trade-card">
           <TradeForm
+            ref="tradeFormRef"
             :symbol="symbol"
             :credential-id="selectedCredentialId"
             :submitting="submitting"
+            :computing="planComputing"
             @open-confirm="onOpenConfirm"
+            @compute-plan="onComputePlan"
           />
+          <div v-if="planResult" class="plan-summary">
+            <span v-if="!planResult.structure_found" class="plan-warn">未找到结构，已用 ATR 兜底</span>
+            <div class="plan-stat"><label>结构点</label><b>{{ planResult.structure ? planResult.structure.price : '—' }}</b></div>
+            <div class="plan-stat"><label>止损</label><b>{{ planResult.stop_price }}</b></div>
+            <div class="plan-stat"><label>止盈</label><b>{{ planResult.take_profit_price }}</b></div>
+            <div class="plan-stat"><label>数量</label><b>{{ planResult.quantity }}</b></div>
+            <div class="plan-stat"><label>风险额</label><b>{{ planResult.risk_amount.toFixed(2) }}</b></div>
+            <div class="plan-stat"><label>所需保证金</label><b>{{ planResult.required_margin.toFixed(2) }}</b></div>
+            <div v-for="(w, i) in planResult.warnings" :key="i" class="plan-warn">⚠ {{ w }}</div>
+            <div v-if="!planResult.feasible" class="plan-warn">该方案不可行，请调整参数后再下单</div>
+          </div>
+          <div v-if="planError" class="plan-warn plan-error">计算失败：{{ planError }}</div>
         </div>
         <div class="patterns-block">
           <h2 class="section-title">
@@ -549,6 +564,18 @@ function redrawPriceLines() {
       axisLabelVisible: true, title: label,
     }))
   }
+
+  // Structure pivot from the latest smart plan (dashed)
+  if (planResult.value?.structure_found && planResult.value.structure) {
+    priceLines.push(candleSeries.createPriceLine({
+      price: planResult.value.structure.price,
+      color: '#cca44d',            // --warning; charts can't read CSS vars directly
+      lineWidth: 1,
+      lineStyle: 2,                // dashed
+      axisLabelVisible: true,
+      title: `结构(${planResult.value.structure.age_bars}根前)`,
+    }))
+  }
 }
 
 // ---- data loading ----
@@ -613,6 +640,34 @@ const submitting = ref(false)
 const confirmOpen = ref(false)
 const submitError = ref('')
 const pendingPayload = ref({})
+
+// ---- smart plan (read-only: structure stop + risk sizing) ----
+
+const tradeFormRef = ref(null)
+const planResult = ref(null)
+const planComputing = ref(false)
+const planError = ref('')
+
+async function onComputePlan(req) {
+  if (!selectedCredentialId.value || !symbol.value) return
+  planComputing.value = true
+  planError.value = ''
+  try {
+    const plan = await api.buildTradingPlan({
+      credential_id: selectedCredentialId.value,
+      symbol: symbol.value,
+      interval: interval.value,
+      ...req,
+    })
+    planResult.value = plan
+    tradeFormRef.value?.applyPlan(plan)   // fill quantity / SL / TP
+    redrawPriceLines()                    // re-draw incl. the new structure line
+  } catch (e) {
+    planError.value = e.message || String(e)
+  } finally {
+    planComputing.value = false
+  }
+}
 
 function onOpenConfirm(payload) {
   submitError.value = ''
@@ -1025,6 +1080,23 @@ onUnmounted(() => {
 }
 .env-tag.env-testnet { background: var(--accent-subtle); color: var(--accent); }
 .env-tag.env-mainnet { background: var(--danger-subtle); color: var(--danger); }
+
+/* ---- smart plan summary ---- */
+.plan-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  padding: 12px;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+.plan-stat { display: flex; flex-direction: column; gap: 2px; }
+.plan-stat label { font-size: 11px; color: var(--text-tertiary); }
+.plan-stat b { font-size: 14px; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.plan-warn { width: 100%; font-size: 12px; color: var(--warning); }
+.plan-error { margin-top: 8px; }
 
 /* ---- modal ---- */
 .modal-mask {

@@ -335,16 +335,20 @@ def build_position_plan(
 ) -> dict[str, Any]:
     """Read-only: fetch klines + account + exchangeInfo, find the structural
     pivot, and compute an ATR-buffered stop, R:R take-profit and risk-defined
-    position size. Places NO order."""
+    position size. Places NO order.
+
+    For MARKET orders the entry is derived from candles[-1].close — the last
+    REST snapshot, not a live mark price (may lag by up to one polling cycle).
+    """
     symbol = symbol.upper()
 
-    need = lookback + atr_period + 2 * fractal_k + 5
-    candles = fetch_klines(symbol, interval, limit=max(need, 50))
+    need = min(max(lookback + atr_period + 2 * fractal_k + 5, 50), 1500)
+    candles = fetch_klines(symbol, interval, limit=need)
     if not candles:
         raise ValueError(f"no klines for {symbol} {interval}")
 
     if order_type == "LIMIT":
-        if not entry_price or entry_price <= 0:
+        if entry_price is None or entry_price <= 0:
             raise ValueError("LIMIT 单需提供有效的 entry_price")
         entry = float(entry_price)
     else:
@@ -356,11 +360,10 @@ def build_position_plan(
 
     structure = find_pivot(candles, direction, entry, k=fractal_k, lookback=lookback)
 
-    acct = get_account(credential_id)
-    equity = acct["total_wallet_balance"] + acct["total_unrealized_pnl"]
-    available = acct["available_balance"]
-
-    env, api_key, _secret = _resolve(credential_id)
+    env, api_key, secret = _resolve(credential_id)
+    raw_acct = bn.account_info(env, api_key, secret)
+    equity = float(raw_acct.get("totalWalletBalance", 0)) + float(raw_acct.get("totalUnrealizedProfit", 0))
+    available = float(raw_acct.get("availableBalance", 0))
     filters = pp.parse_filters(bn.exchange_info(env, api_key), symbol)
 
     plan = pp.compute_plan(

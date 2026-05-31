@@ -4,6 +4,8 @@ from trading.position_plan import (
     compute_plan, PositionPlan,
 )
 from klines.structure import StructurePoint, LONG, SHORT
+from klines.models import Candle
+from trading import service
 
 
 def _fake_info(symbol="BTCUSDT", notional_type="MIN_NOTIONAL"):
@@ -162,9 +164,6 @@ def test_compute_plan_stop_wrong_side_is_infeasible():
 
 # ---- Task 5: build_position_plan orchestrator ----
 
-from klines.models import Candle
-from trading import service
-
 
 def _candle(close, t=0, closed=True):
     return Candle(open_time=t, close_time=t + 1, open=close, high=close + 1,
@@ -180,10 +179,12 @@ def test_build_position_plan_orchestrates(monkeypatch):
     monkeypatch.setattr(service, "find_pivot",
                         lambda *a, **k: StructurePoint(price=95.0, bar_index=6,
                                                        bar_time=0, age_bars=3))
-    monkeypatch.setattr(service, "get_account", lambda cid: {
-        "total_wallet_balance": 10000.0, "total_unrealized_pnl": 0.0,
-        "available_balance": 10000.0,
-    })
+    monkeypatch.setattr(service.bn, "account_info",
+                        lambda env, key, secret: {
+                            "totalWalletBalance": 10000.0,
+                            "totalUnrealizedProfit": 0.0,
+                            "availableBalance": 10000.0,
+                        })
     monkeypatch.setattr(service.bn, "exchange_info", lambda env, key: {
         "symbols": [{"symbol": "BTCUSDT", "filters": [
             {"filterType": "PRICE_FILTER", "tickSize": "0.10"},
@@ -208,6 +209,12 @@ def test_build_position_plan_limit_requires_entry_price(monkeypatch):
     monkeypatch.setattr(service, "fetch_klines",
                         lambda *a, **k: [_candle(100.0, t=i) for i in range(30)])
     monkeypatch.setattr(service, "compute_atr", lambda candles, period: 2.0)
+    monkeypatch.setattr(service.bn, "account_info",
+                        lambda env, key, secret: {
+                            "totalWalletBalance": 0.0,
+                            "totalUnrealizedProfit": 0.0,
+                            "availableBalance": 0.0,
+                        })
     with pytest.raises(ValueError):
         service.build_position_plan(
             credential_id=1, symbol="BTCUSDT", interval="4h", direction="long",

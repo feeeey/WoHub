@@ -1,5 +1,5 @@
 from klines.models import Candle
-from klines.structure import find_pivot, StructurePoint, LONG, SHORT
+from klines.structure import find_pivot, StructurePoint, LONG, SHORT, atr
 
 
 def mk(low, high, t=0, closed=True):
@@ -59,3 +59,27 @@ def test_invalid_direction_raises():
     import pytest
     with pytest.raises(ValueError):
         find_pivot(_long_series(), "sideways", ref_price=100)
+
+
+def test_atr_constant_true_range_equals_that_range():
+    # every candle: high=110, low=100, close=105 -> TR = 10 for every i>=1
+    candles = [mk(100, 110, t=i) for i in range(10)]
+    for c in candles:
+        c.close = 105
+        c.open = 105
+    assert atr(candles, period=3) == 10.0
+
+
+def test_atr_insufficient_data_returns_none():
+    candles = [mk(100, 110, t=i) for i in range(3)]
+    assert atr(candles, period=14) is None
+
+
+def test_atr_ignores_unclosed_tail():
+    candles = [mk(100, 110, t=i) for i in range(10)]
+    for c in candles:
+        c.close = 105
+        c.open = 105
+    candles[-1] = mk(100, 200, t=9, closed=False)  # wild unclosed bar must be ignored
+    candles[-1].close = 105
+    assert atr(candles, period=3) == 10.0

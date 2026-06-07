@@ -1,4 +1,5 @@
 import os
+import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -8,9 +9,23 @@ from database import init_db
 from api import api_router
 
 
+def _insecure_default_warning(bad: list[str]) -> str | None:
+    """Build the startup security-warning message, or None if config is safe."""
+    if not bad:
+        return None
+    return ("不安全的默认配置：" + ", ".join(bad) +
+            " 仍为默认值；主网交易已被禁用。设置强随机值后重启。")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db(settings.db_path)
+    _msg = _insecure_default_warning(settings.insecure_defaults())
+    if _msg:
+        from app_logger import log as _applog
+        _applog("security", "warn", _msg)
+        _bar = "=" * 60
+        print(f"\n{_bar}\n⚠️  WoHub: {_msg}\n{_bar}\n", file=sys.stderr, flush=True)
     from ai.strategy import ensure_default_strategy
     ensure_default_strategy()
     from api.tasks import start_all_enabled

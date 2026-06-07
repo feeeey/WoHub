@@ -68,4 +68,25 @@ async def test_api_add_testnet_credential_allowed_under_defaults(client, monkeyp
         "label": "t", "env": "testnet",
         "api_key": "key0000000", "api_secret": "secret0000",
     })
-    assert resp.status_code != 400
+    assert resp.status_code == 200
+    assert "id" in resp.json()
+
+
+def test_add_credential_allows_testnet_under_defaults_and_resolve_succeeds(monkeypatch):
+    """Full integration: a testnet credential created under insecure defaults
+    must remain resolvable (create -> store -> fetch -> decrypt -> _resolve)."""
+    _set_defaults(monkeypatch)
+    cid = add_credential("t", "testnet", "key0000000", "secret0000")
+    assert cid > 0
+    assert service._resolve(cid) == ("testnet", "key0000000", "secret0000")
+
+
+@pytest.mark.asyncio
+async def test_api_add_mainnet_credential_allowed_when_secure(client, monkeypatch):
+    _set_secure(monkeypatch)
+    resp = await client.post("/api/trading/credentials", json={
+        "label": "m", "env": "mainnet",
+        "api_key": "key0000000", "api_secret": "secret0000",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["id"] > 0

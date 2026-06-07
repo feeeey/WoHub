@@ -76,17 +76,27 @@ def _confirm(symbol, assume_yes):
 
 
 def _cleanup(service, cred_id, symbol, quiet=False):
-    """Best-effort: cancel all open orders for symbol, then close any position."""
+    """Best-effort: cancel all open orders for symbol, then close any position.
+    Surfaces cancel/list failures when not quiet so leftover testnet orders are
+    not silently missed."""
+    cancelled = 0
+    failed = 0
     try:
         for o in service.list_open_orders(cred_id, symbol=symbol):
             oid = o.get("orderId")
             if oid is not None:
                 try:
                     service.cancel_open_order(cred_id, symbol, oid)
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                    cancelled += 1
+                except Exception as e:
+                    failed += 1
+                    if not quiet:
+                        print(f"  cleanup: cancel order {oid} failed: {e}")
+    except Exception as e:
+        if not quiet:
+            print(f"  cleanup: list_open_orders {symbol} failed: {e}")
+    if not quiet and (cancelled or failed):
+        print(f"  cleanup: cancelled {cancelled} order(s), {failed} failed")
     try:
         res = service.close_position(cred_id, symbol)
         if not quiet:
@@ -129,7 +139,7 @@ def main(argv=None):
     try:
         from database import init_db
         init_db(os.environ["DB_PATH"])
-        from trading import service as service
+        from trading import service
         from trading import binance_client as bn
         from trading import position_plan as pp
         from trading.credentials import add_credential
@@ -190,15 +200,19 @@ def main(argv=None):
         _cleanup(service, cred_id, symbol, quiet=True)
 
         # Step 5: deliberate filter rejection (sub-min-notional)
-        bad_qty = sub_min_notional_qty(entry_price, filters.min_notional, filters.step_size)
-        rej = service.place_order(cred_id, OrderRequest(
-            symbol=symbol, side="BUY", order_type="MARKET",
-            quantity=bad_qty, leverage=args.leverage))
-        if not rej.ok and rej.error:
-            rep.record("filter rejection surfaced", "PASS", rej.error[:120])
+        if filters.min_notional <= 0:
+            rep.record("filter rejection surfaced", "SKIP",
+                       "symbol has no min_notional filter to test against")
         else:
-            rep.record("filter rejection surfaced", "FAIL", f"expected rejection, got ok={rej.ok}")
-            _cleanup(service, cred_id, symbol, quiet=True)
+            bad_qty = sub_min_notional_qty(entry_price, filters.min_notional, filters.step_size)
+            rej = service.place_order(cred_id, OrderRequest(
+                symbol=symbol, side="BUY", order_type="MARKET",
+                quantity=bad_qty, leverage=args.leverage))
+            if not rej.ok and rej.error:
+                rep.record("filter rejection surfaced", "PASS", rej.error[:120])
+            else:
+                rep.record("filter rejection surfaced", "FAIL", f"expected rejection, got ok={rej.ok}")
+                _cleanup(service, cred_id, symbol, quiet=True)
 
         # Step 6: naked-position reproduction (entry fills, SL rejected)
         bad_stop = wrong_side_stop_price("long", entry_price, filters.tick_size)

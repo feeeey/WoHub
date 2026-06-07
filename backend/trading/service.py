@@ -27,10 +27,20 @@ from trading import position_plan as pp
 
 
 def _resolve(credential_id: int) -> tuple[str, str, str]:
-    """Decrypt credential by id. Raises ValueError if missing/disabled."""
+    """Decrypt credential by id. Raises ValueError if missing/disabled, or if a
+    mainnet credential is used while security-critical settings are still at
+    their insecure defaults (see config.insecure_defaults())."""
     creds = get_credential(credential_id)
     if not creds:
         raise ValueError(f"credential {credential_id} not found or disabled")
+    if creds[0] == "mainnet":
+        bad = settings.insecure_defaults()
+        if bad:
+            raise ValueError(
+                "拒绝在不安全的默认配置下使用主网凭据：" + "、".join(bad) +
+                " 仍为默认值。请设置强随机的 SECRET_KEY 与 APP_PASSWORD 后重启。"
+                "（注意：设置或轮换 SECRET_KEY 会使已加密的 API secret 失效，需重新录入。）"
+            )
     return creds  # (env, api_key, api_secret)
 
 

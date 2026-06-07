@@ -45,6 +45,12 @@ def decrypt_secret(ciphertext: str) -> str:
 def add_credential(label: str, env: str, api_key: str, api_secret: str) -> int:
     if env not in ("testnet", "mainnet"):
         raise ValueError(f"env must be 'testnet' or 'mainnet', got {env!r}")
+    if env == "mainnet" and settings.insecure_defaults():
+        raise ValueError(
+            "拒绝在不安全的默认配置下新建主网凭据：" +
+            "、".join(settings.insecure_defaults()) +
+            " 仍为默认值。请设置强随机的 SECRET_KEY 与 APP_PASSWORD 后重启。"
+        )
     if not api_key or not api_secret:
         raise ValueError("api_key and api_secret must be non-empty")
     enc = encrypt_secret(api_secret)

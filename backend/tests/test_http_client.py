@@ -53,3 +53,43 @@ def test_cached_expires():
     time.sleep(0.15)
     cached("test_key_3", fetcher, ttl=0.1)
     assert call_count == 2
+
+
+def test_fetch_with_fallback_sets_default_timeout(monkeypatch):
+    """Session objects have no working .timeout attr — a per-request timeout
+    must be injected or a hung connection blocks the worker forever."""
+    from sources import http_client
+    captured = {}
+
+    class _FakeSession:
+        def get(self, url, **kwargs):
+            captured.update(kwargs)
+
+            class _R:
+                status_code = 200
+                def raise_for_status(self): pass
+                def json(self): return {}
+            return _R()
+
+    monkeypatch.setattr(http_client, "get_session", lambda: _FakeSession())
+    http_client.fetch_with_fallback("get", "https://example.com")
+    assert captured["timeout"] == 10
+
+
+def test_fetch_with_fallback_respects_caller_timeout(monkeypatch):
+    from sources import http_client
+    captured = {}
+
+    class _FakeSession:
+        def get(self, url, **kwargs):
+            captured.update(kwargs)
+
+            class _R:
+                status_code = 200
+                def raise_for_status(self): pass
+                def json(self): return {}
+            return _R()
+
+    monkeypatch.setattr(http_client, "get_session", lambda: _FakeSession())
+    http_client.fetch_with_fallback("get", "https://example.com", timeout=3)
+    assert captured["timeout"] == 3

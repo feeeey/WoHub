@@ -20,7 +20,6 @@ def get_session() -> requests.Session:
         if _session is not None:
             return _session
         s = requests.Session()
-        s.timeout = 10
         s.headers.update({"User-Agent": "WoHub/0.1"})
         # Always opt out of HTTP(S)_PROXY env vars — if proxy_enabled is set
         # we use the explicit project config; if it's off, we want a direct
@@ -43,7 +42,6 @@ def _get_direct_session() -> requests.Session:
         if _direct_session is not None:
             return _direct_session
         s = requests.Session()
-        s.timeout = 10
         s.headers.update({"User-Agent": "WoHub/0.1"})
         s.trust_env = False
         _direct_session = s
@@ -51,7 +49,13 @@ def _get_direct_session() -> requests.Session:
 
 
 def fetch_with_fallback(method, url, **kwargs):
-    """Try with proxy session first. If proxy fails, retry with direct connection."""
+    """Try with proxy session first. If proxy fails, retry with direct connection.
+
+    requests.Session has no timeout attribute, so a per-request timeout is
+    injected here — otherwise a hung connection blocks the worker forever.
+    Callers may override with an explicit timeout= kwarg.
+    """
+    kwargs.setdefault("timeout", 10)
     session = get_session()
     try:
         resp = getattr(session, method)(url, **kwargs)

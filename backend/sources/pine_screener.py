@@ -91,7 +91,6 @@ def _get_session():
     if _session is None:
         _session = requests.Session()
         _session.headers.update(_HEADERS)
-        _session.timeout = 15
         if settings.proxy_enabled:
             proxy = f"http://{settings.proxy_host}:{settings.proxy_port}"
             _session.proxies = {"http": proxy, "https": proxy}
@@ -190,7 +189,7 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
     for attempt in range(_MAX_RETRIES):
         _wait_rate_limit()
         try:
-            resp = session.post(API_URL, data=request_data, cookies=cookies)
+            resp = session.post(API_URL, data=request_data, cookies=cookies, timeout=15)
             applog("pine_screener", "info",
                    f"Response: HTTP {resp.status_code}, {len(resp.text)} bytes",
                    f"attempt={attempt + 1}")
@@ -271,6 +270,7 @@ def fetch_watchlists():
         "https://www.tradingview.com/api/v1/symbols_list/all/",
         headers=headers,
         cookies=cookies,
+        timeout=15,
     )
     resp.raise_for_status()
     return {item["name"]: item["id"] for item in resp.json() if item.get("name")}

@@ -23,6 +23,7 @@ from trading.binance_client import BinanceAPIError
 from trading.credentials import get_credential
 from trading.models import (
     OrderRequest, OrderResult, Position, Balance, BracketOrderResult,
+    RecoveryResult,
 )
 
 from klines.fetcher import fetch_klines
@@ -288,6 +289,128 @@ def _place_protection_with_retry(
         error=f"{order_type}: 重试{PROTECTION_ATTEMPTS}次后仍失败：{last_err}")
 
 
+ENTRY_OPEN_STATUSES = ("NEW", "PARTIALLY_FILLED")
+
+
+def _close_entry_qty(
+    credential_id: int, env: str, api_key: str, secret: str,
+    req: OrderRequest, qty: float,
+) -> OrderResult | None:
+    """Reduce-only market close of exactly the entry's filled quantity.
+    Returns None when nothing attributable to the entry remains to close."""
+    pos_amt: float | None
+    try:
+        rows = bn.position_risk(env, api_key, secret, symbol=req.symbol)
+        pos_amt = sum(float(r.get("positionAmt", 0)) for r in rows)
+    except (BinanceAPIError, requests.RequestException):
+        pos_amt = None  # can't see the position; close qty blind (reduce-only is safe)
+
+    if pos_amt is not None:
+        entry_sign = 1.0 if req.side == "BUY" else -1.0
+        if pos_amt * entry_sign <= 0:
+            return None  # position gone or opposite-direction: nothing of ours left
+        qty = min(qty, abs(pos_amt))
+
+    close_side = _opposite_side(req.side)
+    close_oid = _new_client_order_id()
+    close_req = OrderRequest(
+        symbol=req.symbol, side=close_side, order_type="MARKET",
+        quantity=qty, leverage=req.leverage, margin_type=req.margin_type,
+        reduce_only=True,
+    )
+    try:
+        raw = bn.place_order(
+            env, api_key, secret,
+            symbol=req.symbol, side=close_side, order_type="MARKET",
+            quantity=qty, reduce_only=True, new_client_order_id=close_oid,
+        )
+        result = OrderResult(
+            ok=True, binance_order_id=str(raw.get("orderId", "")),
+            status=raw.get("status"),
+            executed_qty=float(raw.get("executedQty", 0)),
+            avg_price=float(raw.get("avgPrice", 0) or 0), raw=raw,
+        )
+    except requests.RequestException as e:
+        state, raw = _query_order_state(env, api_key, secret, req.symbol, close_oid)
+        if state == "exists":
+            result = OrderResult(
+                ok=True, binance_order_id=str(raw.get("orderId", "")),
+                status=raw.get("status"), raw=raw,
+            )
+        else:
+            result = OrderResult(ok=False, error=f"平仓请求网络异常（{state}）：{e}")
+    except BinanceAPIError as e:
+        result = OrderResult(ok=False, error=str(e))
+    _record_order(credential_id, env, close_req, result)
+    return result
+
+
+def _undo_entry(
+    credential_id: int, env: str, api_key: str, secret: str,
+    req: OrderRequest, entry: OrderResult, sl_client_oid: str,
+) -> RecoveryResult:
+    """以损定仓：a position whose stop cannot be placed must not exist.
+    Cancel the unfilled remainder of the entry and market-close the filled
+    quantity. Sets naked_position when the undo could not be completed."""
+    detail_parts: list[str] = []
+    entry_cancel: OrderResult | None = None
+    close_result: OrderResult | None = None
+    naked = False
+
+    # 1. Best-effort: remove a possibly-orphaned SL trigger order (an
+    #    ambiguous attempt may have landed). Nothing there is the normal case.
+    try:
+        bn.cancel_order(env, api_key, secret, req.symbol,
+                        orig_client_order_id=sl_client_oid)
+        detail_parts.append("已撤销疑似残留的止损触发单")
+    except (BinanceAPIError, requests.RequestException):
+        pass
+
+    executed = entry.executed_qty
+    if executed <= 0 and entry.status == "FILLED":
+        executed = req.quantity  # degenerate raw without executedQty
+
+    # 2. Cancel the unfilled remainder of the entry.
+    if entry.status in ENTRY_OPEN_STATUSES and entry.binance_order_id:
+        try:
+            raw = bn.cancel_order(env, api_key, secret, req.symbol,
+                                  order_id=entry.binance_order_id)
+            executed = float(raw.get("executedQty", executed) or 0)
+            entry_cancel = OrderResult(
+                ok=True, binance_order_id=str(raw.get("orderId", "")),
+                status=raw.get("status"), executed_qty=executed, raw=raw,
+            )
+            detail_parts.append("已撤销未成交的入场单")
+        except (BinanceAPIError, requests.RequestException) as e:
+            entry_cancel = OrderResult(ok=False, error=str(e))
+            naked = True  # the order may still fill later, unprotected
+            detail_parts.append(f"撤销入场单失败：{e}")
+
+    # 3. Close whatever filled.
+    if executed > 0:
+        close_result = _close_entry_qty(
+            credential_id, env, api_key, secret, req, executed)
+        if close_result is None:
+            detail_parts.append("持仓已不存在或方向相反，无需平仓")
+        elif close_result.ok:
+            detail_parts.append(f"已市价平掉本次成交量 {executed}")
+        else:
+            naked = True
+            detail_parts.append(f"自动平仓失败：{close_result.error}")
+
+    detail = "；".join(detail_parts) or "无需任何撤销动作"
+    if naked:
+        applog("binance_trade", "error",
+               f"⚠️ {req.symbol} 入场撤销未完成，可能存在无止损保护的持仓：{detail}")
+    else:
+        applog("binance_trade", "warn",
+               f"{req.symbol} 止损设置失败，入场已撤销：{detail}")
+    return RecoveryResult(
+        attempted=True, entry_cancel=entry_cancel, close=close_result,
+        naked_position=naked, detail=detail,
+    )
+
+
 def place_order_bracket(
     credential_id: int,
     req: OrderRequest,
@@ -296,13 +419,13 @@ def place_order_bracket(
 ) -> BracketOrderResult:
     """Place an entry order with optional protection orders (SL + TP).
 
-    The protection orders are STOP_MARKET / TAKE_PROFIT_MARKET with
-    closePosition=true — when triggered they liquidate the full position at
-    market. This is the safest and most common bracket pattern.
-
-    If the entry fails, neither SL nor TP is attempted. If the entry succeeds
-    but SL or TP fails, the entry is NOT rolled back — the caller is told and
-    can place the missing protection manually.
+    Protection orders are STOP_MARKET / TAKE_PROFIT_MARKET with
+    closePosition=true. The stop-loss is NOT best-effort: if it cannot be
+    placed after bounded retries, the entry is undone (unfilled remainder
+    cancelled, filled quantity market-closed) — 以损定仓, a position whose
+    stop cannot exist must not exist. TP failure with the SL in place keeps
+    the position and reports the failure. See
+    docs/superpowers/specs/2026-06-10-bracket-sl-recovery-design.md.
     """
     entry = place_order(credential_id, req)
     if not entry.ok:
@@ -319,47 +442,40 @@ def place_order_bracket(
     tp_result: OrderResult | None = None
 
     if stop_loss_price is not None:
+        sl_oid = _new_client_order_id()
         sl_req = OrderRequest(
             symbol=req.symbol, side=close_side, order_type="STOP_MARKET",
             quantity=req.quantity,  # ignored when closePosition=true, but keeps validator happy
             leverage=req.leverage, margin_type=req.margin_type,
         )
-        try:
-            raw = bn.place_order(
-                env, api_key, secret,
-                symbol=req.symbol, side=close_side, order_type="STOP_MARKET",
-                stop_price=stop_loss_price, close_position=True,
-            )
-            sl_result = OrderResult(
-                ok=True,
-                binance_order_id=str(raw.get("orderId", "")),
-                status=raw.get("status"),
-                raw=raw,
-            )
-        except BinanceAPIError as e:
-            sl_result = OrderResult(ok=False, error=f"stop_loss: {e}")
+        sl_result = _place_protection_with_retry(
+            env, api_key, secret,
+            symbol=req.symbol, side=close_side, order_type="STOP_MARKET",
+            stop_price=stop_loss_price, client_oid=sl_oid,
+        )
         _record_order(credential_id, env, sl_req, sl_result)
+        if not sl_result.ok:
+            applog("binance_trade", "error",
+                   f"{req.symbol} 止损单设置失败，启动入场撤销：{sl_result.error}")
+            recovery = _undo_entry(
+                credential_id, env, api_key, secret, req, entry, sl_oid)
+            return BracketOrderResult(
+                ok=False, entry=entry, stop_loss=sl_result,
+                take_profit=None, recovery=recovery,
+            )
 
     if take_profit_price is not None:
+        tp_oid = _new_client_order_id()
         tp_req = OrderRequest(
             symbol=req.symbol, side=close_side, order_type="TAKE_PROFIT_MARKET",
             quantity=req.quantity,
             leverage=req.leverage, margin_type=req.margin_type,
         )
-        try:
-            raw = bn.place_order(
-                env, api_key, secret,
-                symbol=req.symbol, side=close_side, order_type="TAKE_PROFIT_MARKET",
-                stop_price=take_profit_price, close_position=True,
-            )
-            tp_result = OrderResult(
-                ok=True,
-                binance_order_id=str(raw.get("orderId", "")),
-                status=raw.get("status"),
-                raw=raw,
-            )
-        except BinanceAPIError as e:
-            tp_result = OrderResult(ok=False, error=f"take_profit: {e}")
+        tp_result = _place_protection_with_retry(
+            env, api_key, secret,
+            symbol=req.symbol, side=close_side, order_type="TAKE_PROFIT_MARKET",
+            stop_price=take_profit_price, client_oid=tp_oid,
+        )
         _record_order(credential_id, env, tp_req, tp_result)
 
     overall = entry.ok and (sl_result is None or sl_result.ok) and (tp_result is None or tp_result.ok)

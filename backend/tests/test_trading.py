@@ -21,6 +21,7 @@ from trading.binance_client import (
     set_margin_type as bn_set_margin_type,
     get_order as bn_get_order,
     cancel_order as bn_cancel_order,
+    is_retryable,
     ERR_NO_NEED_TO_CHANGE_MARGIN_TYPE,
 )
 from trading.models import OrderRequest, OrderResult
@@ -761,6 +762,20 @@ def test_cancel_order_by_client_order_id(monkeypatch):
 def test_cancel_order_requires_an_identifier():
     with pytest.raises(ValueError):
         bn_cancel_order("testnet", "K", "S", "BTCUSDT")
+
+
+def test_is_retryable_classification():
+    # transient server / rate-limit conditions -> retryable
+    assert is_retryable(BinanceAPIError(code=-1001, msg="", http_status=500))
+    assert is_retryable(BinanceAPIError(code=-1003, msg="", http_status=429))
+    assert is_retryable(BinanceAPIError(code=-1007, msg="", http_status=408))
+    assert is_retryable(BinanceAPIError(code=-1021, msg="", http_status=400))
+    assert is_retryable(BinanceAPIError(code=0, msg="", http_status=502))
+    assert is_retryable(BinanceAPIError(code=0, msg="", http_status=418))
+    # business rejections -> fatal (retry storms are pointless and dangerous)
+    assert not is_retryable(BinanceAPIError(code=-2021, msg="would trigger", http_status=400))
+    assert not is_retryable(BinanceAPIError(code=-1111, msg="precision", http_status=400))
+    assert not is_retryable(BinanceAPIError(code=-2019, msg="margin", http_status=400))
 
 
 # ---------- HTTP API ----------

@@ -56,6 +56,22 @@ class BinanceAPIError(Exception):
         self.http_status = http_status
 
 
+# Transient conditions where the same request may succeed on retry.
+RETRYABLE_CODES = {-1001, -1003, -1007, -1021}  # internal error / rate limit / timeout / recvWindow
+
+
+def is_retryable(e: BinanceAPIError) -> bool:
+    """True when retrying the same request may succeed (transient server or
+    rate-limit conditions). Everything else is fatal by default — for trigger
+    orders a default-fatal posture avoids retry storms on filter violations
+    (-4xxx), would-immediately-trigger (-2021), insufficient margin (-2019)."""
+    return (
+        e.code in RETRYABLE_CODES
+        or e.http_status in (418, 429)
+        or e.http_status >= 500
+    )
+
+
 def base_url(env: str) -> str:
     if env == "testnet":
         return TESTNET_BASE

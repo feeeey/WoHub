@@ -19,6 +19,7 @@ from trading.binance_client import (
     _sign, _build_signed_query, base_url, BinanceAPIError,
     place_order as bn_place_order,
     set_margin_type as bn_set_margin_type,
+    get_order as bn_get_order,
     ERR_NO_NEED_TO_CHANGE_MARGIN_TYPE,
 )
 from trading.models import OrderRequest, OrderResult
@@ -712,6 +713,31 @@ def test_place_order_passes_new_client_order_id(monkeypatch):
         new_client_order_id="wohub-abc123",
     )
     assert "newClientOrderId=wohub-abc123" in captured["url"]
+
+
+def test_get_order_queries_by_client_order_id(monkeypatch):
+    captured = {}
+
+    def fake_fetch(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        r = _resp(200, {"orderId": 7, "status": "NEW", "executedQty": "0"})
+        r.raise_for_status()
+        return r
+
+    monkeypatch.setattr("trading.binance_client.fetch_with_fallback", fake_fetch)
+
+    out = bn_get_order("testnet", "K", "S", "BTCUSDT", orig_client_order_id="wohub-x")
+    assert out["orderId"] == 7
+    assert captured["method"] == "get"
+    assert "/fapi/v1/order" in captured["url"]
+    assert "origClientOrderId=wohub-x" in captured["url"]
+    assert "&signature=" in captured["url"]
+
+
+def test_get_order_requires_an_identifier():
+    with pytest.raises(ValueError):
+        bn_get_order("testnet", "K", "S", "BTCUSDT")
 
 
 # ---------- HTTP API ----------

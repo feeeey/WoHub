@@ -43,6 +43,7 @@ RECV_WINDOW_MS = 5000
 # Binance fapi error codes we want to handle specifically.
 ERR_NO_NEED_TO_CHANGE_MARGIN_TYPE = -4046
 ERR_LEVERAGE_NOT_MODIFIED = -4028  # rarely seen — leverage change yields different code in practice
+ERR_ORDER_NOT_FOUND = -2013  # GET/DELETE /fapi/v1/order when the order does not exist
 
 
 class BinanceAPIError(Exception):
@@ -256,6 +257,27 @@ def place_order(
         raise ValueError(f"unsupported order_type: {order_type}")
 
     return _request("POST", env, "/fapi/v1/order", api_key, api_secret, params, signed=True)
+
+
+def get_order(
+    env: str, api_key: str, api_secret: str, symbol: str,
+    order_id: int | str | None = None,
+    orig_client_order_id: str | None = None,
+) -> dict:
+    """GET /fapi/v1/order — single-order status lookup.
+
+    Used to resolve ambiguous submissions (network error after send): query by
+    the clientOrderId we generated. Raises BinanceAPIError with code -2013
+    (ERR_ORDER_NOT_FOUND) when the order does not exist on Binance.
+    """
+    if order_id is None and orig_client_order_id is None:
+        raise ValueError("get_order requires order_id or orig_client_order_id")
+    params: dict[str, Any] = {"symbol": symbol}
+    if order_id is not None:
+        params["orderId"] = order_id
+    if orig_client_order_id is not None:
+        params["origClientOrderId"] = orig_client_order_id
+    return _request("GET", env, "/fapi/v1/order", api_key, api_secret, params, signed=True)
 
 
 def cancel_order(env: str, api_key: str, api_secret: str, symbol: str, order_id: int | str) -> dict:

@@ -695,6 +695,25 @@ def test_place_order_stop_market_requires_stop_price():
         )
 
 
+def test_place_order_passes_new_client_order_id(monkeypatch):
+    captured = {}
+
+    def fake_fetch(method, url, **kwargs):
+        captured["url"] = url
+        r = _resp(200, {"orderId": 1, "status": "NEW"})
+        r.raise_for_status()
+        return r
+
+    monkeypatch.setattr("trading.binance_client.fetch_with_fallback", fake_fetch)
+
+    bn_place_order(
+        "testnet", "K", "S",
+        symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001,
+        new_client_order_id="wohub-abc123",
+    )
+    assert "newClientOrderId=wohub-abc123" in captured["url"]
+
+
 # ---------- HTTP API ----------
 
 @pytest.mark.asyncio

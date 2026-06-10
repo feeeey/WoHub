@@ -200,6 +200,7 @@ def place_order(
     reduce_only: bool = False,
     close_position: bool = False,
     time_in_force: str = "GTC",
+    new_client_order_id: str | None = None,
 ) -> dict:
     """POST /fapi/v1/order.
 
@@ -209,6 +210,8 @@ def place_order(
         close_position=True the whole position is liquidated on trigger and
         `quantity` is omitted per Binance docs.
 
+    `new_client_order_id` is the caller-supplied idempotency key (<=36 chars).
+
     The caller must have already set leverage / margin type for the symbol.
     """
     params: dict[str, Any] = {
@@ -216,6 +219,11 @@ def place_order(
         "side": side,
         "type": order_type,
     }
+    if new_client_order_id:
+        # Caller-supplied idempotency key. Binance rejects a duplicate id while
+        # the first order is live, so a transport-level resend (proxy->direct
+        # fallback in fetch_with_fallback) can never double-fill.
+        params["newClientOrderId"] = new_client_order_id
 
     if order_type in ("MARKET", "LIMIT"):
         if quantity is None or quantity <= 0:

@@ -30,3 +30,5 @@ Thumbs.db
 /CryptoFuturesHub/
 /pine-screener/
 /ChartShot/
+
+.claude/settings.local.json

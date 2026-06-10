@@ -137,8 +137,11 @@ def _query_order_state(
 ) -> tuple[str, dict | None]:
     """After a network error left a submission ambiguous, ask Binance whether
     the order exists. Returns ("exists", raw) / ("absent", None) /
-    ("unknown", None) — "unknown" means the caller must assume the worst."""
-    for _ in range(2):  # one extra try if the query itself hits a network error
+    ("unknown", None) — "unknown" means the caller must assume the worst.
+
+    "exists" only proves the row is on Binance — callers must still check the
+    status via _order_effective(); a CANCELED/EXPIRED row protects nothing."""
+    for _ in range(2):  # one extra try if the query itself fails transiently
         try:
             raw = bn.get_order(env, api_key, secret, symbol,
                                orig_client_order_id=client_oid)
@@ -146,10 +149,23 @@ def _query_order_state(
         except BinanceAPIError as e:
             if e.code == bn.ERR_ORDER_NOT_FOUND:
                 return "absent", None
+            if bn.is_retryable(e):
+                continue
             return "unknown", None
         except requests.RequestException:
             continue
     return "unknown", None
+
+
+ORDER_DEAD_STATUSES = ("CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH")
+
+
+def _order_effective(raw: dict | None) -> bool:
+    """True when a recovered order landed in a state that does (or already
+    did) its job: NEW / PARTIALLY_FILLED / FILLED. A CANCELED/EXPIRED/REJECTED
+    row exists on Binance but protects and executes nothing — treating it as
+    success would leave a position without its stop."""
+    return bool(raw) and (raw.get("status") or "") not in ORDER_DEAD_STATUSES
 
 
 def place_order(credential_id: int, req: OrderRequest) -> OrderResult:
@@ -196,12 +212,14 @@ def place_order(credential_id: int, req: OrderRequest) -> OrderResult:
             reduce_only=req.reduce_only,
             new_client_order_id=client_oid,
         )
-    except BinanceAPIError as e:
-        result = OrderResult(ok=False, error=str(e))
-        _record_order(credential_id, env, req, result)
-        return result
-    except requests.RequestException as e:
-        # Transport died — the order MAY have reached Binance. Resolve by id.
+    except (BinanceAPIError, requests.RequestException) as e:
+        if (isinstance(e, BinanceAPIError)
+                and e.code != bn.ERR_DUPLICATE_CLIENT_ORDER_ID):
+            result = OrderResult(ok=False, error=str(e))
+            _record_order(credential_id, env, req, result)
+            return result
+        # Ambiguous: transport died, OR a duplicate-id rejection says an
+        # earlier transport-level resend already landed. Resolve by id.
         state, raw = _query_order_state(env, api_key, secret, req.symbol, client_oid)
         if state == "absent":
             result = OrderResult(ok=False, error=f"网络异常，订单未送达交易所：{e}")
@@ -213,9 +231,15 @@ def place_order(credential_id: int, req: OrderRequest) -> OrderResult:
             result = OrderResult(ok=False, error=msg)
             _record_order(credential_id, env, req, result)
             return result
+        if not _order_effective(raw):
+            result = OrderResult(
+                ok=False, status=raw.get("status"), raw=raw,
+                error=f"订单已送达但状态为 {raw.get('status')}，未生效")
+            _record_order(credential_id, env, req, result)
+            return result
         applog("binance_trade", "warn",
-               f"下单请求网络异常，但订单已被交易所接受（{client_oid}）")
-        # state == "exists": fall through with raw from get_order
+               f"下单请求异常（{e}），但订单已被交易所接受（{client_oid}）")
+        # state == "exists" and effective: fall through with raw from get_order
 
     result = OrderResult(
         ok=True,
@@ -268,16 +292,39 @@ def _place_protection_with_retry(
             )
         except BinanceAPIError as e:
             last_err = e
+            if e.code == bn.ERR_DUPLICATE_CLIENT_ORDER_ID:
+                # An earlier transport-level resend (or a late-landing first
+                # attempt after an "absent" verdict) already created the order
+                # — verify instead of failing a submission that succeeded.
+                state, raw = _query_order_state(env, api_key, secret, symbol, client_oid)
+                if state == "exists" and _order_effective(raw):
+                    return OrderResult(
+                        ok=True, binance_order_id=str(raw.get("orderId", "")),
+                        status=raw.get("status"),
+                        executed_qty=float(raw.get("executedQty", 0) or 0),
+                        avg_price=float(raw.get("avgPrice", 0) or 0), raw=raw,
+                    )
+                return OrderResult(
+                    ok=False,
+                    error=f"{order_type}: clientOrderId 重复但订单未生效（{state}）：{e}")
             if not bn.is_retryable(e):
                 return OrderResult(ok=False, error=f"{order_type}: {e}")
         except requests.RequestException as e:
             last_err = e
             state, raw = _query_order_state(env, api_key, secret, symbol, client_oid)
             if state == "exists":
+                if _order_effective(raw):
+                    return OrderResult(
+                        ok=True, binance_order_id=str(raw.get("orderId", "")),
+                        status=raw.get("status"),
+                        executed_qty=float(raw.get("executedQty", 0) or 0),
+                        avg_price=float(raw.get("avgPrice", 0) or 0), raw=raw,
+                    )
+                # The row exists but is CANCELED/EXPIRED — it protects
+                # nothing. Fail so the caller undoes the entry.
                 return OrderResult(
-                    ok=True, binance_order_id=str(raw.get("orderId", "")),
-                    status=raw.get("status"), raw=raw,
-                )
+                    ok=False,
+                    error=f"{order_type}: 订单已送达但状态为 {raw.get('status')}，未生效")
             if state == "unknown":
                 return OrderResult(
                     ok=False, error=f"{order_type}: 网络异常且订单状态未知：{e}")
@@ -330,17 +377,21 @@ def _close_entry_qty(
             executed_qty=float(raw.get("executedQty", 0)),
             avg_price=float(raw.get("avgPrice", 0) or 0), raw=raw,
         )
-    except requests.RequestException as e:
-        state, raw = _query_order_state(env, api_key, secret, req.symbol, close_oid)
-        if state == "exists":
-            result = OrderResult(
-                ok=True, binance_order_id=str(raw.get("orderId", "")),
-                status=raw.get("status"), raw=raw,
-            )
+    except (BinanceAPIError, requests.RequestException) as e:
+        if (isinstance(e, BinanceAPIError)
+                and e.code != bn.ERR_DUPLICATE_CLIENT_ORDER_ID):
+            result = OrderResult(ok=False, error=str(e))
         else:
-            result = OrderResult(ok=False, error=f"平仓请求网络异常（{state}）：{e}")
-    except BinanceAPIError as e:
-        result = OrderResult(ok=False, error=str(e))
+            state, raw = _query_order_state(env, api_key, secret, req.symbol, close_oid)
+            if state == "exists" and _order_effective(raw):
+                result = OrderResult(
+                    ok=True, binance_order_id=str(raw.get("orderId", "")),
+                    status=raw.get("status"),
+                    executed_qty=float(raw.get("executedQty", 0) or 0),
+                    avg_price=float(raw.get("avgPrice", 0) or 0), raw=raw,
+                )
+            else:
+                result = OrderResult(ok=False, error=f"平仓请求异常（{state}）：{e}")
     _record_order(credential_id, env, close_req, result)
     return result
 

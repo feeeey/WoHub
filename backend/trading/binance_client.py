@@ -44,6 +44,7 @@ RECV_WINDOW_MS = 5000
 ERR_NO_NEED_TO_CHANGE_MARGIN_TYPE = -4046
 ERR_LEVERAGE_NOT_MODIFIED = -4028  # rarely seen — leverage change yields different code in practice
 ERR_ORDER_NOT_FOUND = -2013  # GET/DELETE /fapi/v1/order when the order does not exist
+ERR_DUPLICATE_CLIENT_ORDER_ID = -4116  # newClientOrderId already used by a live order
 
 
 class BinanceAPIError(Exception):

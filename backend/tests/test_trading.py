@@ -564,6 +564,168 @@ def test_protection_retry_reuses_same_client_oid(monkeypatch):
     assert "重试" in res.error
 
 
+# ---------- review follow-ups: status validation / dup-id / query retry ----------
+
+def test_query_order_state_retries_transient_api_error(monkeypatch):
+    """A retryable BinanceAPIError from get_order (e.g. -1001) must be
+    retried, not collapsed straight into 'unknown'."""
+    calls = {"n": 0}
+
+    def fake_get_order(env, k, s, symbol, order_id=None, orig_client_order_id=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise BinanceAPIError(code=-1001, msg="Internal error.", http_status=500)
+        return {"orderId": 5, "status": "NEW"}
+
+    monkeypatch.setattr("trading.binance_client.get_order", fake_get_order)
+    state, raw = service._query_order_state("testnet", "K", "S", "BTCUSDT", "wohub-q1")
+    assert state == "exists"
+    assert raw["orderId"] == 5
+    assert calls["n"] == 2
+
+
+def test_protection_ambiguity_canceled_order_is_failure(monkeypatch):
+    """Network error on SL submit; get_order finds the row but it is CANCELED —
+    a dead row protects nothing and must NOT count as success."""
+    monkeypatch.setattr(
+        "trading.binance_client.place_order",
+        _raise(requests.ConnectionError("reset")))
+    monkeypatch.setattr(
+        "trading.binance_client.get_order",
+        lambda *a, **kw: {"orderId": 8, "status": "CANCELED"})
+    monkeypatch.setattr(service, "_sleep", lambda s: None)
+
+    res = service._place_protection_with_retry(
+        "testnet", "K", "S", symbol="BTCUSDT", side="SELL",
+        order_type="STOP_MARKET", stop_price=65000.0, client_oid="wohub-q2")
+    assert not res.ok
+    assert "未生效" in res.error
+
+
+def test_protection_duplicate_client_id_resolved_as_success(monkeypatch):
+    """-4116 duplicate clientOrderId means an earlier transport-level resend
+    landed — verify and accept instead of failing a successful submission."""
+    monkeypatch.setattr(
+        "trading.binance_client.place_order",
+        _raise(BinanceAPIError(code=-4116, msg="ClientOrderId is duplicated.",
+                               http_status=400)))
+    monkeypatch.setattr(
+        "trading.binance_client.get_order",
+        lambda *a, **kw: {"orderId": 12, "status": "NEW"})
+    monkeypatch.setattr(service, "_sleep", lambda s: None)
+
+    res = service._place_protection_with_retry(
+        "testnet", "K", "S", symbol="BTCUSDT", side="SELL",
+        order_type="STOP_MARKET", stop_price=65000.0, client_oid="wohub-q3")
+    assert res.ok
+    assert res.binance_order_id == "12"
+
+
+def test_entry_duplicate_client_id_resolved_as_success(monkeypatch):
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        "trading.binance_client.place_order",
+        _raise(BinanceAPIError(code=-4116, msg="ClientOrderId is duplicated.",
+                               http_status=400)))
+    monkeypatch.setattr(
+        "trading.binance_client.get_order",
+        lambda *a, **kw: {"orderId": 90, "status": "FILLED",
+                          "executedQty": "0.001", "avgPrice": "70000"})
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order(cred_id, OrderRequest(
+        symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001))
+    assert result.ok
+    assert result.binance_order_id == "90"
+    assert result.executed_qty == 0.001
+
+
+def test_entry_ambiguity_canceled_order_is_failure(monkeypatch):
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        "trading.binance_client.place_order",
+        _raise(requests.ConnectionError("reset")))
+    monkeypatch.setattr(
+        "trading.binance_client.get_order",
+        lambda *a, **kw: {"orderId": 91, "status": "EXPIRED", "executedQty": "0"})
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order(cred_id, OrderRequest(
+        symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001))
+    assert not result.ok
+    assert "未生效" in result.error
+
+
+def test_bracket_close_network_unknown_flags_naked(monkeypatch):
+    """SL fatal; the recovery close hits a network error AND the verification
+    query keeps failing -> state unknown -> naked_position=True."""
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+    monkeypatch.setattr(service, "_sleep", lambda s: None)
+
+    def fake_order(env, k, s, **kw):
+        if kw.get("order_type") == "STOP_MARKET":
+            raise BinanceAPIError(code=-2021, msg="Order would immediately trigger.",
+                                  http_status=400)
+        if kw.get("reduce_only"):
+            raise requests.ConnectionError("reset during close")
+        return {"orderId": 1, "status": "FILLED", "executedQty": "0.001", "avgPrice": "70000"}
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+    monkeypatch.setattr("trading.binance_client.cancel_order", _raise(
+        BinanceAPIError(code=-2013, msg="Order does not exist.", http_status=400)))
+    monkeypatch.setattr("trading.binance_client.position_risk",
+                        lambda *a, **kw: [{"symbol": "BTCUSDT", "positionAmt": "0.001"}])
+    monkeypatch.setattr("trading.binance_client.get_order",
+                        _raise(requests.Timeout("query timed out")))
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order_bracket(
+        cred_id,
+        OrderRequest(symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001),
+        stop_loss_price=65000.0)
+    assert not result.ok
+    assert result.recovery and result.recovery.naked_position is True
+
+
+def test_bracket_close_network_recovered_extracts_fill(monkeypatch):
+    """Recovery close hits a network error but get_order confirms it filled —
+    success, with executed_qty extracted from the recovered row."""
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+    monkeypatch.setattr(service, "_sleep", lambda s: None)
+
+    def fake_order(env, k, s, **kw):
+        if kw.get("order_type") == "STOP_MARKET":
+            raise BinanceAPIError(code=-2021, msg="Order would immediately trigger.",
+                                  http_status=400)
+        if kw.get("reduce_only"):
+            raise requests.ConnectionError("reset during close")
+        return {"orderId": 1, "status": "FILLED", "executedQty": "0.001", "avgPrice": "70000"}
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+    monkeypatch.setattr("trading.binance_client.cancel_order", _raise(
+        BinanceAPIError(code=-2013, msg="Order does not exist.", http_status=400)))
+    monkeypatch.setattr("trading.binance_client.position_risk",
+                        lambda *a, **kw: [{"symbol": "BTCUSDT", "positionAmt": "0.001"}])
+    monkeypatch.setattr(
+        "trading.binance_client.get_order",
+        lambda *a, **kw: {"orderId": 33, "status": "FILLED",
+                          "executedQty": "0.001", "avgPrice": "69990"})
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order_bracket(
+        cred_id,
+        OrderRequest(symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001),
+        stop_loss_price=65000.0)
+    assert not result.ok                                  # SL still failed
+    assert result.recovery and result.recovery.naked_position is False
+    assert result.recovery.close.ok
+    assert result.recovery.close.executed_qty == 0.001    # extracted, not 0.0
+
+
 # ---------- bracket order ----------
 
 def _raise(exc):

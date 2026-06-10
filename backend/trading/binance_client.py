@@ -280,12 +280,21 @@ def get_order(
     return _request("GET", env, "/fapi/v1/order", api_key, api_secret, params, signed=True)
 
 
-def cancel_order(env: str, api_key: str, api_secret: str, symbol: str, order_id: int | str) -> dict:
-    return _request(
-        "DELETE", env, "/fapi/v1/order", api_key, api_secret,
-        {"symbol": symbol, "orderId": order_id},
-        signed=True,
-    )
+def cancel_order(
+    env: str, api_key: str, api_secret: str, symbol: str,
+    order_id: int | str | None = None,
+    orig_client_order_id: str | None = None,
+) -> dict:
+    """DELETE /fapi/v1/order by orderId or by our generated clientOrderId.
+    Raises BinanceAPIError -2013 when there is nothing to cancel."""
+    if order_id is None and orig_client_order_id is None:
+        raise ValueError("cancel_order requires order_id or orig_client_order_id")
+    params: dict[str, Any] = {"symbol": symbol}
+    if order_id is not None:
+        params["orderId"] = order_id
+    if orig_client_order_id is not None:
+        params["origClientOrderId"] = orig_client_order_id
+    return _request("DELETE", env, "/fapi/v1/order", api_key, api_secret, params, signed=True)
 
 
 def open_orders(

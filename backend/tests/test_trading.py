@@ -20,6 +20,7 @@ from trading.binance_client import (
     place_order as bn_place_order,
     set_margin_type as bn_set_margin_type,
     get_order as bn_get_order,
+    cancel_order as bn_cancel_order,
     ERR_NO_NEED_TO_CHANGE_MARGIN_TYPE,
 )
 from trading.models import OrderRequest, OrderResult
@@ -738,6 +739,28 @@ def test_get_order_queries_by_client_order_id(monkeypatch):
 def test_get_order_requires_an_identifier():
     with pytest.raises(ValueError):
         bn_get_order("testnet", "K", "S", "BTCUSDT")
+
+
+def test_cancel_order_by_client_order_id(monkeypatch):
+    captured = {}
+
+    def fake_fetch(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        r = _resp(200, {"orderId": 3, "status": "CANCELED"})
+        r.raise_for_status()
+        return r
+
+    monkeypatch.setattr("trading.binance_client.fetch_with_fallback", fake_fetch)
+
+    bn_cancel_order("testnet", "K", "S", "BTCUSDT", orig_client_order_id="wohub-y")
+    assert captured["method"] == "delete"
+    assert "origClientOrderId=wohub-y" in captured["url"]
+
+
+def test_cancel_order_requires_an_identifier():
+    with pytest.raises(ValueError):
+        bn_cancel_order("testnet", "K", "S", "BTCUSDT")
 
 
 # ---------- HTTP API ----------

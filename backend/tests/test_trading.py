@@ -300,6 +300,47 @@ def test_service_place_order_records_failure_with_error(monkeypatch):
     assert latest["error_message"] is not None
 
 
+def test_service_place_order_continues_when_margin_type_fails(monkeypatch):
+    """set_margin_type failure must NOT abort the order — margin type is a
+    best-effort preference. The order proceeds and a warning is attached."""
+    def fail_margin(*a, **kw):
+        raise BinanceAPIError(code=-1109, msg="Invalid account.", http_status=400)
+
+    def fake_order(env, k, s, **kw):
+        return {"orderId": 7, "status": "FILLED",
+                "executedQty": "0.001", "avgPrice": "70000"}
+
+    monkeypatch.setattr("trading.binance_client.set_margin_type", fail_margin)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order(cred_id, OrderRequest(
+        symbol="BTCUSDT", side="BUY", order_type="MARKET",
+        quantity=0.001, leverage=5, margin_type="ISOLATED",
+    ))
+    assert result.ok
+    assert result.binance_order_id == "7"
+    assert result.warning is not None and "保证金模式" in result.warning
+
+
+def test_service_place_order_aborts_when_leverage_fails(monkeypatch):
+    """set_leverage failure DOES abort — leverage affects margin/liquidation."""
+    def fail_lev(*a, **kw):
+        raise BinanceAPIError(code=-1109, msg="Invalid account.", http_status=400)
+
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", fail_lev)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order(cred_id, OrderRequest(
+        symbol="BTCUSDT", side="BUY", order_type="MARKET",
+        quantity=0.001, leverage=5, margin_type="ISOLATED",
+    ))
+    assert not result.ok
+    assert "set_leverage" in result.error
+
+
 def test_service_place_order_validates_request():
     cred_id = creds.add_credential("t", "testnet", "K", "S")
     # LIMIT without price -> validate() raises ValueError before any HTTP call

@@ -47,6 +47,7 @@ class OrderResult:
     avg_price: float = 0.0
     raw: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    warning: str | None = None       # non-fatal note, e.g. margin type left unchanged
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

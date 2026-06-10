@@ -128,14 +128,21 @@ def place_order(credential_id: int, req: OrderRequest) -> OrderResult:
     req.validate()
     env, api_key, secret = _resolve(credential_id)
 
-    # ---- preflight: leverage + margin type (both idempotent) ----
+    # ---- preflight: margin type (best-effort) ----
+    # Margin type is a per-symbol preference, not a hard requirement for placing
+    # an order. If Binance refuses to set it — account in Multi-Assets / cross-only
+    # mode, the symbol already uses this mode, or the config endpoint returns
+    # -1109 on an otherwise-valid account — do NOT abort the order. Proceed with
+    # the account's current margin mode and surface a warning; a genuinely
+    # untradeable account still fails at set_leverage or the order itself.
+    margin_warning: str | None = None
     try:
         bn.set_margin_type(env, api_key, secret, req.symbol, req.margin_type)
     except BinanceAPIError as e:
-        result = OrderResult(ok=False, error=f"set_margin_type: {e}")
-        _record_order(credential_id, env, req, result)
-        return result
+        margin_warning = f"未能设置保证金模式（{req.margin_type}），沿用账户当前模式：{e}"
+        applog("binance_trade", "warn", margin_warning)
 
+    # ---- preflight: leverage (required — affects margin & liquidation price) ----
     try:
         bn.set_leverage(env, api_key, secret, req.symbol, req.leverage)
     except BinanceAPIError as e:
@@ -166,6 +173,7 @@ def place_order(credential_id: int, req: OrderRequest) -> OrderResult:
         executed_qty=float(raw.get("executedQty", 0)),
         avg_price=float(raw.get("avgPrice", 0)) or float(raw.get("price", 0) or 0),
         raw=raw,
+        warning=margin_warning,
     )
     _record_order(credential_id, env, req, result)
     return result

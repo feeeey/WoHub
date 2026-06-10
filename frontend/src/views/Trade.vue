@@ -352,7 +352,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { createChart, CandlestickSeries, createSeriesMarkers, CrosshairMode } from 'lightweight-charts'
+import { createChart, CandlestickSeries, CrosshairMode } from 'lightweight-charts'
 import { api } from '../api/client.js'
 import ClassificationChain from '../components/ClassificationChain.vue'
 import TradeForm from '../components/TradeForm.vue'
@@ -429,7 +429,6 @@ const activeTab = ref('positions')
 const chartContainer = ref(null)
 let chart = null
 let candleSeries = null
-let markerSet = null
 let priceLines = []
 let resizeObserver = null
 let themeObserver = null
@@ -503,25 +502,6 @@ function updateChart() {
     open: c.open, high: c.high, low: c.low, close: c.close,
   }))
   candleSeries.setData(data)
-
-  // Pattern markers
-  const t = readTheme()
-  const markers = (klPayload.value.patterns || []).map(p => {
-    const latestIdx = Math.max(...p.indices)
-    const absIdx = data.length + latestIdx
-    if (absIdx < 0 || absIdx >= data.length) return null
-    const candle = data[absIdx]
-    return {
-      time: candle.time,
-      position: p.direction === 'bearish' ? 'aboveBar' : 'belowBar',
-      color: p.direction === 'bullish' ? t.up : (p.direction === 'bearish' ? t.down : t.text),
-      shape: p.direction === 'bearish' ? 'arrowDown' : (p.direction === 'bullish' ? 'arrowUp' : 'circle'),
-      text: p.name_zh,
-    }
-  }).filter(Boolean)
-
-  if (markerSet) markerSet.setMarkers(markers)
-  else markerSet = createSeriesMarkers(candleSeries, markers)
 
   chart.timeScale().fitContent()
   redrawPriceLines()

@@ -87,6 +87,11 @@
 
       <div v-if="errorMsg" class="error-bar">{{ errorMsg }}</div>
 
+      <div v-if="recoveryAlert" class="recovery-banner" :class="recoveryAlert.level">
+        <span class="recovery-text">{{ recoveryAlert.text }}</span>
+        <button class="recovery-close" @click="recoveryAlert = null">×</button>
+      </div>
+
       <!-- Chart -->
       <div class="chart-card card">
         <div ref="chartContainer" class="chart-container"></div>
@@ -627,6 +632,7 @@ async function loadHistory() {
 const submitting = ref(false)
 const confirmOpen = ref(false)
 const submitError = ref('')
+const recoveryAlert = ref(null)   // { level: 'danger'|'warn'|'info', text: string }
 const pendingPayload = ref({})
 
 // ---- smart plan (read-only: structure stop + risk sizing) ----
@@ -668,12 +674,28 @@ async function submitOrder() {
   submitError.value = ''
   try {
     const res = await api.placeBracketOrder(pendingPayload.value)
+    recoveryAlert.value = null
+    if (res.recovery) {
+      recoveryAlert.value = res.recovery.naked_position
+        ? { level: 'danger',
+            text: `⚠️ 止损设置失败且自动撤销未完成——可能存在无止损持仓，请立即检查持仓并手动处理！（${res.recovery.detail}）` }
+        : { level: 'warn',
+            text: `止损单设置失败，已自动撤销本次入场（以损定仓：无止损不持仓）。${res.recovery.detail}` }
+    } else if (res.ok && res.entry?.warning) {
+      recoveryAlert.value = { level: 'info', text: res.entry.warning }
+    }
     if (!res.ok) {
       const errs = []
       if (!res.entry.ok) errs.push(`入场失败：${res.entry.error}`)
       if (res.stop_loss && !res.stop_loss.ok) errs.push(`止损失败：${res.stop_loss.error}`)
       if (res.take_profit && !res.take_profit.ok) errs.push(`止盈失败：${res.take_profit.error}`)
       submitError.value = errs.join(' · ') || '未知错误'
+      if (res.recovery) {
+        // entry was undone (or needs attention) — close the modal so the
+        // banner and refreshed positions are visible
+        confirmOpen.value = false
+        await loadAccountAndOrders()
+      }
       return
     }
     confirmOpen.value = false
@@ -1136,6 +1158,20 @@ onUnmounted(() => {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
+}
+
+.recovery-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: 8px; margin: 8px 0;
+  font-size: 13px; line-height: 1.5;
+}
+.recovery-banner.danger { background: rgba(220, 53, 69, 0.12); border: 1px solid rgba(220, 53, 69, 0.6); color: #dc3545; font-weight: 600; }
+.recovery-banner.warn   { background: rgba(255, 165, 0, 0.10);  border: 1px solid rgba(255, 165, 0, 0.5);  color: #c87f0a; }
+.recovery-banner.info   { background: rgba(13, 110, 253, 0.08); border: 1px solid rgba(13, 110, 253, 0.4); color: #4a8fe7; }
+.recovery-banner .recovery-text { flex: 1; }
+.recovery-banner .recovery-close {
+  background: none; border: none; cursor: pointer; color: inherit;
+  font-size: 16px; padding: 0 4px;
 }
 
 @media (max-width: 1024px) {

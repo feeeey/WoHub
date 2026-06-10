@@ -214,7 +214,7 @@ def main(argv=None):
                 rep.record("filter rejection surfaced", "FAIL", f"expected rejection, got ok={rej.ok}")
                 _cleanup(service, cred_id, symbol, quiet=True)
 
-        # Step 6: naked-position reproduction (entry fills, SL rejected)
+        # Step 6: SL-rejection recovery (entry fills, SL rejected -> entry undone)
         bad_stop = wrong_side_stop_price("long", entry_price, filters.tick_size)
         nb = service.place_order_bracket(cred_id, OrderRequest(
             symbol=symbol, side="BUY", order_type="MARKET",
@@ -223,14 +223,16 @@ def main(argv=None):
             acct2 = service.get_account(cred_id)
             has_pos = any(po["symbol"] == symbol and po["position_amt"] != 0
                           for po in acct2["positions"])
-            opens2 = service.list_open_orders(cred_id, symbol=symbol)
-            stop_present = any(o.get("type") == "STOP_MARKET" for o in opens2)
-            sl_err = nb.stop_loss.error[:80] if nb.stop_loss else "?"
-            rep.record("naked-position gap reproduced", "WARN",
-                       f"entry filled, SL rejected ({sl_err}); position_open={has_pos} "
-                       f"stop_present={stop_present} -> Option B (bracket recovery) needed")
+            recovered = nb.recovery is not None and nb.recovery.attempted
+            if recovered and not has_pos and not nb.recovery.naked_position:
+                rep.record("SL-rejection recovery", "PASS",
+                           f"entry undone automatically: {nb.recovery.detail}")
+            else:
+                rep.record("SL-rejection recovery", "FAIL",
+                           f"recovery={recovered} position_open={has_pos} "
+                           f"naked={nb.recovery.naked_position if nb.recovery else '?'}")
         else:
-            rep.record("naked-position gap reproduced", "SKIP",
+            rep.record("SL-rejection recovery", "SKIP",
                        f"entry.ok={nb.entry.ok} (scenario not set up)")
         _cleanup(service, cred_id, symbol, quiet=True)
 

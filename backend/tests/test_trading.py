@@ -482,6 +482,88 @@ async def test_api_credentials_create_and_list(client):
     assert "supersecret123" not in listed.text
 
 
+# ---------- protection placement (retry helper) ----------
+
+def test_protection_retry_transient_then_success(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_order(env, k, s, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise BinanceAPIError(code=-1001, msg="Internal error.", http_status=500)
+        return {"orderId": 9, "status": "NEW"}
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+    monkeypatch.setattr(service, "_sleep", lambda s: None)
+
+    res = service._place_protection_with_retry(
+        "testnet", "K", "S", symbol="BTCUSDT", side="SELL",
+        order_type="STOP_MARKET", stop_price=65000.0, client_oid="wohub-t1")
+    assert res.ok
+    assert calls["n"] == 2
+
+
+def test_protection_retry_fatal_fails_immediately(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_order(env, k, s, **kw):
+        calls["n"] += 1
+        raise BinanceAPIError(code=-2021, msg="Order would immediately trigger.", http_status=400)
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+    monkeypatch.setattr(service, "_sleep", lambda s: None)
+
+    res = service._place_protection_with_retry(
+        "testnet", "K", "S", symbol="BTCUSDT", side="SELL",
+        order_type="STOP_MARKET", stop_price=65000.0, client_oid="wohub-t2")
+    assert not res.ok
+    assert calls["n"] == 1          # no retry on fatal codes
+    assert "immediately trigger" in res.error
+
+
+def test_protection_retry_ambiguous_verified_exists(monkeypatch):
+    """Network error on submit, but get_order finds the trigger order —
+    success without a second (duplicate) submission."""
+    placed = {"n": 0}
+
+    def fake_order(env, k, s, **kw):
+        placed["n"] += 1
+        raise requests.ConnectionError("reset mid-flight")
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+    monkeypatch.setattr(
+        "trading.binance_client.get_order",
+        lambda env, k, s, symbol, order_id=None, orig_client_order_id=None:
+            {"orderId": 77, "status": "NEW"})
+    monkeypatch.setattr(service, "_sleep", lambda s: None)
+
+    res = service._place_protection_with_retry(
+        "testnet", "K", "S", symbol="BTCUSDT", side="SELL",
+        order_type="STOP_MARKET", stop_price=65000.0, client_oid="wohub-t3")
+    assert res.ok
+    assert res.binance_order_id == "77"
+    assert placed["n"] == 1
+
+
+def test_protection_retry_reuses_same_client_oid(monkeypatch):
+    oids = []
+
+    def fake_order(env, k, s, **kw):
+        oids.append(kw.get("new_client_order_id"))
+        raise BinanceAPIError(code=-1001, msg="Internal error.", http_status=500)
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+    monkeypatch.setattr(service, "_sleep", lambda s: None)
+
+    res = service._place_protection_with_retry(
+        "testnet", "K", "S", symbol="BTCUSDT", side="SELL",
+        order_type="STOP_MARKET", stop_price=65000.0, client_oid="wohub-t4")
+    assert not res.ok
+    assert len(oids) == 3                      # PROTECTION_ATTEMPTS
+    assert set(oids) == {"wohub-t4"}           # identical id every attempt
+    assert "重试" in res.error
+
+
 # ---------- bracket order ----------
 
 def test_bracket_order_with_sl_and_tp_places_three_orders(monkeypatch):

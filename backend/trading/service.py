@@ -233,6 +233,61 @@ def _opposite_side(side: str) -> str:
     return "SELL" if side == "BUY" else "BUY"
 
 
+PROTECTION_ATTEMPTS = 3
+PROTECTION_BACKOFF_S = (0.5, 1.0)
+
+# module-level alias so tests can stub the wait without touching time itself
+_sleep = time.sleep
+
+
+def _place_protection_with_retry(
+    env: str, api_key: str, secret: str, *,
+    symbol: str, side: str, order_type: str, stop_price: float,
+    client_oid: str,
+) -> OrderResult:
+    """Place a closePosition trigger order (SL/TP) with bounded retries.
+
+    Every attempt reuses the same clientOrderId: our own retry or a
+    transport-level resend can never create a second live trigger order, and
+    an ambiguous earlier attempt is recovered via get_order instead of
+    re-submitted blind. Fatal rejections (filters, would-immediately-trigger)
+    fail on the first attempt — see binance_client.is_retryable."""
+    last_err: Exception | None = None
+    for attempt in range(PROTECTION_ATTEMPTS):
+        try:
+            raw = bn.place_order(
+                env, api_key, secret,
+                symbol=symbol, side=side, order_type=order_type,
+                stop_price=stop_price, close_position=True,
+                new_client_order_id=client_oid,
+            )
+            return OrderResult(
+                ok=True, binance_order_id=str(raw.get("orderId", "")),
+                status=raw.get("status"), raw=raw,
+            )
+        except BinanceAPIError as e:
+            last_err = e
+            if not bn.is_retryable(e):
+                return OrderResult(ok=False, error=f"{order_type}: {e}")
+        except requests.RequestException as e:
+            last_err = e
+            state, raw = _query_order_state(env, api_key, secret, symbol, client_oid)
+            if state == "exists":
+                return OrderResult(
+                    ok=True, binance_order_id=str(raw.get("orderId", "")),
+                    status=raw.get("status"), raw=raw,
+                )
+            if state == "unknown":
+                return OrderResult(
+                    ok=False, error=f"{order_type}: 网络异常且订单状态未知：{e}")
+            # state == "absent": never reached Binance; safe to retry same id.
+        if attempt < PROTECTION_ATTEMPTS - 1:
+            _sleep(PROTECTION_BACKOFF_S[min(attempt, len(PROTECTION_BACKOFF_S) - 1)])
+    return OrderResult(
+        ok=False,
+        error=f"{order_type}: 重试{PROTECTION_ATTEMPTS}次后仍失败：{last_err}")
+
+
 def place_order_bracket(
     credential_id: int,
     req: OrderRequest,

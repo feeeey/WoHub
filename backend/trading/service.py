@@ -573,6 +573,77 @@ def close_position(credential_id: int, symbol: str) -> OrderResult:
     return result
 
 
+def close_all(credential_id: int) -> dict[str, Any]:
+    """Kill-switch: cancel every open order, then flatten every position with
+    reduce-only market orders.
+
+    Cancels run FIRST so closePosition trigger orders cannot fire while we
+    flatten. Individual failures never abort the sweep — the report carries
+    one row per action so the caller sees exactly what is still open."""
+    env, api_key, secret = _resolve(credential_id)
+    report: list[dict[str, Any]] = []
+    ok = True
+
+    # 1. Cancel all open orders, per symbol.
+    try:
+        opens = bn.open_orders(env, api_key, secret)
+    except (BinanceAPIError, requests.RequestException) as e:
+        opens = []
+        ok = False
+        report.append({"action": "list_open_orders", "ok": False, "error": str(e)})
+    for sym in sorted({o["symbol"] for o in opens}):
+        try:
+            bn.cancel_all_orders(env, api_key, secret, sym)
+            report.append({"action": "cancel_all", "symbol": sym, "ok": True})
+        except (BinanceAPIError, requests.RequestException) as e:
+            ok = False
+            report.append({"action": "cancel_all", "symbol": sym, "ok": False,
+                           "error": str(e)})
+
+    # 2. Flatten every non-zero position.
+    try:
+        rows = bn.position_risk(env, api_key, secret)
+    except (BinanceAPIError, requests.RequestException) as e:
+        rows = []
+        ok = False
+        report.append({"action": "list_positions", "ok": False, "error": str(e)})
+    for r in rows:
+        amt = float(r.get("positionAmt", 0) or 0)
+        if amt == 0:
+            continue
+        sym = r["symbol"]
+        side = "SELL" if amt > 0 else "BUY"
+        qty = abs(amt)
+        close_req = OrderRequest(symbol=sym, side=side, order_type="MARKET",
+                                 quantity=qty, reduce_only=True)
+        try:
+            raw = bn.place_order(
+                env, api_key, secret,
+                symbol=sym, side=side, order_type="MARKET",
+                quantity=qty, reduce_only=True,
+                new_client_order_id=_new_client_order_id(),
+            )
+            result = OrderResult(
+                ok=True, binance_order_id=str(raw.get("orderId", "")),
+                status=raw.get("status"),
+                executed_qty=float(raw.get("executedQty", 0) or 0),
+                avg_price=float(raw.get("avgPrice", 0) or 0), raw=raw,
+            )
+        except (BinanceAPIError, requests.RequestException) as e:
+            result = OrderResult(ok=False, error=str(e))
+        _record_order(credential_id, env, close_req, result)
+        entry: dict[str, Any] = {"action": "close", "symbol": sym, "qty": qty,
+                                 "ok": result.ok}
+        if not result.ok:
+            ok = False
+            entry["error"] = result.error
+        report.append(entry)
+
+    applog("binance_trade", "warn" if ok else "error",
+           f"kill-switch executed: ok={ok}, actions={len(report)}")
+    return {"ok": ok, "actions": report}
+
+
 def list_open_orders(credential_id: int, symbol: str | None = None) -> list[dict]:
     env, api_key, secret = _resolve(credential_id)
     return bn.open_orders(env, api_key, secret, symbol=symbol.upper() if symbol else None)

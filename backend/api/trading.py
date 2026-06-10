@@ -14,7 +14,7 @@ from trading.credentials import (
 )
 from trading.service import (
     test_credential, get_account, place_order, list_recent_orders,
-    place_order_bracket, close_position, list_open_orders,
+    place_order_bracket, close_position, close_all, list_open_orders,
     cancel_open_order, list_binance_order_history, build_position_plan,
 )
 from trading.models import OrderRequest
@@ -171,6 +171,25 @@ class ClosePositionBody(BaseModel):
 def close(body: ClosePositionBody):
     try:
         return close_position(body.credential_id, body.symbol).to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---------- kill-switch (cancel everything, flatten everything) ----------
+
+class KillSwitchBody(BaseModel):
+    credential_id: int
+
+
+@router.post("/kill-switch")
+def kill_switch(body: KillSwitchBody):
+    """Cancel all open orders, then close every position at market.
+    Returns a per-action report; ok=false means something is still open."""
+    applog("binance_trade", "warn", f"kill-switch requested (cred={body.credential_id})")
+    try:
+        return close_all(body.credential_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

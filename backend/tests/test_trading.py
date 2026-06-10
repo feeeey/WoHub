@@ -1064,6 +1064,97 @@ def test_bracket_tp_failure_keeps_position(monkeypatch):
     assert cancel_called["n"] == 0
 
 
+# ---------- kill-switch (close_all) ----------
+
+def test_close_all_cancels_orders_then_flattens(monkeypatch):
+    """Kill-switch: cancel every open order FIRST (triggers must not fire
+    mid-flatten), then reduce-only market-close every position."""
+    events = []
+
+    monkeypatch.setattr(
+        "trading.binance_client.open_orders",
+        lambda env, k, s, symbol=None: [
+            {"symbol": "BTCUSDT", "orderId": 1, "type": "STOP_MARKET"},
+            {"symbol": "ETHUSDT", "orderId": 2, "type": "LIMIT"},
+        ])
+
+    def fake_cancel_all(env, k, s, symbol):
+        events.append(("cancel_all", symbol))
+        return {"code": 200}
+
+    def fake_pos(env, k, s, symbol=None):
+        return [
+            {"symbol": "BTCUSDT", "positionAmt": "0.002"},
+            {"symbol": "ETHUSDT", "positionAmt": "-0.5"},
+            {"symbol": "XRPUSDT", "positionAmt": "0"},
+        ]
+
+    def fake_order(env, k, s, **kw):
+        events.append(("close", kw["symbol"], kw["side"], kw["quantity"], kw.get("reduce_only")))
+        return {"orderId": 9, "status": "FILLED", "executedQty": str(kw["quantity"]),
+                "avgPrice": "100"}
+
+    monkeypatch.setattr("trading.binance_client.cancel_all_orders", fake_cancel_all)
+    monkeypatch.setattr("trading.binance_client.position_risk", fake_pos)
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    out = service.close_all(cred_id)
+
+    assert out["ok"] is True
+    # cancels strictly before closes
+    cancel_idx = [i for i, e in enumerate(events) if e[0] == "cancel_all"]
+    close_idx = [i for i, e in enumerate(events) if e[0] == "close"]
+    assert cancel_idx and close_idx and max(cancel_idx) < min(close_idx)
+    assert ("cancel_all", "BTCUSDT") in events
+    assert ("cancel_all", "ETHUSDT") in events
+    # long closed with SELL, short with BUY, both reduce-only; flat symbol skipped
+    assert ("close", "BTCUSDT", "SELL", 0.002, True) in events
+    assert ("close", "ETHUSDT", "BUY", 0.5, True) in events
+    assert all(e[1] != "XRPUSDT" for e in events if e[0] == "close")
+
+
+def test_close_all_reports_partial_failure(monkeypatch):
+    monkeypatch.setattr(
+        "trading.binance_client.open_orders", lambda env, k, s, symbol=None: [])
+    monkeypatch.setattr(
+        "trading.binance_client.position_risk",
+        lambda env, k, s, symbol=None: [
+            {"symbol": "BTCUSDT", "positionAmt": "0.002"},
+            {"symbol": "ETHUSDT", "positionAmt": "-0.5"},
+        ])
+
+    def fake_order(env, k, s, **kw):
+        if kw["symbol"] == "BTCUSDT":
+            raise BinanceAPIError(code=-2019, msg="Margin is insufficient.", http_status=400)
+        return {"orderId": 9, "status": "FILLED", "executedQty": str(kw["quantity"]),
+                "avgPrice": "100"}
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    out = service.close_all(cred_id)
+    assert out["ok"] is False
+    closes = [a for a in out["actions"] if a["action"] == "close"]
+    assert len(closes) == 2                       # ETH still attempted after BTC failed
+    btc = next(a for a in closes if a["symbol"] == "BTCUSDT")
+    eth = next(a for a in closes if a["symbol"] == "ETHUSDT")
+    assert btc["ok"] is False and "Margin" in btc["error"]
+    assert eth["ok"] is True
+
+
+def test_close_all_with_nothing_open_is_ok(monkeypatch):
+    monkeypatch.setattr(
+        "trading.binance_client.open_orders", lambda env, k, s, symbol=None: [])
+    monkeypatch.setattr(
+        "trading.binance_client.position_risk", lambda env, k, s, symbol=None: [])
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    out = service.close_all(cred_id)
+    assert out["ok"] is True
+    assert out["actions"] == []
+
+
 # ---------- close_position ----------
 
 def test_close_position_long_places_opposite_market_sell(monkeypatch):

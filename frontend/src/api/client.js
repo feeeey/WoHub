@@ -283,6 +283,13 @@ export const api = {
     })
   },
 
+  async killSwitch(credentialId) {
+    return request('/trading/kill-switch', {
+      method: 'POST',
+      body: JSON.stringify({ credential_id: credentialId }),
+    })
+  },
+
   async getOpenOrders(credentialId, symbol = null) {
     const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''
     return request(`/trading/open-orders/${credentialId}${q}`)

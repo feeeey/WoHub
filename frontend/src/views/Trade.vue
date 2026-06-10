@@ -83,6 +83,10 @@
             未实现盈亏 <strong>{{ pnlSign(account.total_unrealized_pnl) }}{{ fmt(account.total_unrealized_pnl) }}</strong>
           </span>
         </div>
+        <button class="btn kill-switch-btn" :disabled="!selectedCredentialId || killing"
+                @click="onKillSwitch">
+          {{ killing ? '执行中…' : '⛔ 一键全平' }}
+        </button>
       </div>
 
       <div v-if="errorMsg" class="error-bar">{{ errorMsg }}</div>
@@ -633,6 +637,7 @@ const submitting = ref(false)
 const confirmOpen = ref(false)
 const submitError = ref('')
 const recoveryAlert = ref(null)   // { level: 'danger'|'warn'|'info', text: string }
+const killing = ref(false)
 const pendingPayload = ref({})
 
 // ---- smart plan (read-only: structure stop + risk sizing) ----
@@ -704,6 +709,25 @@ async function submitOrder() {
     submitError.value = e.message
   } finally {
     submitting.value = false
+  }
+}
+
+async function onKillSwitch() {
+  if (!confirm('确认一键全平？将撤销该账户全部挂单并市价平掉所有持仓，不可撤销。')) return
+  killing.value = true
+  try {
+    const res = await api.killSwitch(selectedCredentialId.value)
+    const fails = (res.actions || []).filter(a => !a.ok)
+    recoveryAlert.value = res.ok
+      ? { level: 'warn', text: `一键全平完成：${res.actions.length} 项操作全部成功。` }
+      : { level: 'danger',
+          text: `⚠️ 一键全平未完全成功（${fails.length} 项失败）——请立即检查持仓与挂单！`
+                + fails.map(f => `【${f.symbol || f.action}】${f.error}`).join('；') }
+    await loadAccountAndOrders()
+  } catch (e) {
+    recoveryAlert.value = { level: 'danger', text: `一键全平请求失败：${e.message}` }
+  } finally {
+    killing.value = false
   }
 }
 
@@ -1173,6 +1197,16 @@ onUnmounted(() => {
   background: none; border: none; cursor: pointer; color: inherit;
   font-size: 16px; padding: 0 4px;
 }
+
+.kill-switch-btn {
+  margin-left: auto;
+  background: rgba(220, 53, 69, 0.10);
+  border: 1px solid rgba(220, 53, 69, 0.55);
+  color: #dc3545;
+  font-weight: 600;
+}
+.kill-switch-btn:hover:not(:disabled) { background: rgba(220, 53, 69, 0.22); }
+.kill-switch-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 @media (max-width: 1024px) {
   .main-row { grid-template-columns: 1fr; }

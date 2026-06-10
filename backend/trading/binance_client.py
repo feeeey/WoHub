@@ -314,6 +314,17 @@ def cancel_order(
     return _request("DELETE", env, "/fapi/v1/order", api_key, api_secret, params, signed=True)
 
 
+def cancel_all_orders(env: str, api_key: str, api_secret: str, symbol: str) -> dict:
+    """DELETE /fapi/v1/allOpenOrders — cancel every open order on one symbol.
+    Used by the kill-switch before flattening, so trigger orders cannot fire
+    mid-flatten."""
+    return _request(
+        "DELETE", env, "/fapi/v1/allOpenOrders", api_key, api_secret,
+        {"symbol": symbol},
+        signed=True,
+    )
+
+
 def open_orders(
     env: str, api_key: str, api_secret: str,
     symbol: str | None = None,

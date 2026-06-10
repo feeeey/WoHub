@@ -764,6 +764,28 @@ def test_cancel_order_requires_an_identifier():
         bn_cancel_order("testnet", "K", "S", "BTCUSDT")
 
 
+def test_bracket_result_to_dict_includes_recovery():
+    from trading.models import RecoveryResult, BracketOrderResult
+    entry = OrderResult(ok=True, binance_order_id="1")
+    rec = RecoveryResult(
+        attempted=True, entry_cancel=None,
+        close=OrderResult(ok=True, binance_order_id="2"),
+        naked_position=False, detail="已平仓",
+    )
+    d = BracketOrderResult(ok=False, entry=entry, recovery=rec).to_dict()
+    assert d["recovery"]["attempted"] is True
+    assert d["recovery"]["naked_position"] is False
+    assert d["recovery"]["close"]["binance_order_id"] == "2"
+    assert d["recovery"]["entry_cancel"] is None
+    assert d["recovery"]["detail"] == "已平仓"
+
+
+def test_bracket_result_to_dict_recovery_none_by_default():
+    from trading.models import BracketOrderResult
+    d = BracketOrderResult(ok=True, entry=OrderResult(ok=True)).to_dict()
+    assert d["recovery"] is None
+
+
 def test_is_retryable_classification():
     # transient server / rate-limit conditions -> retryable
     assert is_retryable(BinanceAPIError(code=-1001, msg="", http_status=500))

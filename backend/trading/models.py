@@ -79,18 +79,44 @@ class Balance:
 
 
 @dataclass
+class RecoveryResult:
+    """What the service did after a stop-loss could not be placed.
+
+    以损定仓：a position whose stop cannot be placed must not exist. The
+    service cancels the unfilled remainder of the entry and market-closes the
+    filled quantity. naked_position=True means that undo could not be
+    completed — an unprotected position may remain and the user must act."""
+    attempted: bool
+    entry_cancel: OrderResult | None
+    close: OrderResult | None
+    naked_position: bool
+    detail: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "attempted": self.attempted,
+            "entry_cancel": self.entry_cancel.to_dict() if self.entry_cancel else None,
+            "close": self.close.to_dict() if self.close else None,
+            "naked_position": self.naked_position,
+            "detail": self.detail,
+        }
+
+
+@dataclass
 class BracketOrderResult:
     """Outcome of an entry-plus-protection submission.
 
     The entry is the source of truth — if it fails, neither SL nor TP is
-    attempted. If the entry succeeds, SL and TP are best-effort: a failure
-    on either does NOT undo the entry; the caller sees the failure and
-    decides what to do (typically: place the missing protection manually).
+    attempted. The stop-loss is NOT best-effort: if it cannot be placed the
+    service undoes the entry and reports what happened in `recovery` (see
+    docs/superpowers/specs/2026-06-10-bracket-sl-recovery-design.md). A TP
+    failure with the SL in place keeps the position and is reported only.
     """
     ok: bool
     entry: OrderResult
     stop_loss: OrderResult | None = None
     take_profit: OrderResult | None = None
+    recovery: RecoveryResult | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -98,4 +124,5 @@ class BracketOrderResult:
             "entry": self.entry.to_dict(),
             "stop_loss": self.stop_loss.to_dict() if self.stop_loss else None,
             "take_profit": self.take_profit.to_dict() if self.take_profit else None,
+            "recovery": self.recovery.to_dict() if self.recovery else None,
         }

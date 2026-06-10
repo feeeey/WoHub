@@ -8,7 +8,11 @@ Wraps the raw fapi client with:
 * dataclass-friendly Position / Balance shapes for the API layer
 """
 import json
+import secrets
+import time
 from typing import Any
+
+import requests
 
 from config import settings
 from database import get_db
@@ -119,6 +123,34 @@ def _record_order(
         applog("binance_trade", "warn", f"failed to record order: {e}")
 
 
+def _new_client_order_id() -> str:
+    """Idempotency key for every order we submit (<=36 chars per Binance).
+    Lets us resolve ambiguous network failures via get_order, and makes a
+    transport-level resend (proxy->direct fallback) a rejected duplicate
+    instead of a second fill."""
+    return f"wohub-{secrets.token_hex(10)}"
+
+
+def _query_order_state(
+    env: str, api_key: str, secret: str, symbol: str, client_oid: str,
+) -> tuple[str, dict | None]:
+    """After a network error left a submission ambiguous, ask Binance whether
+    the order exists. Returns ("exists", raw) / ("absent", None) /
+    ("unknown", None) — "unknown" means the caller must assume the worst."""
+    for _ in range(2):  # one extra try if the query itself hits a network error
+        try:
+            raw = bn.get_order(env, api_key, secret, symbol,
+                               orig_client_order_id=client_oid)
+            return "exists", raw
+        except BinanceAPIError as e:
+            if e.code == bn.ERR_ORDER_NOT_FOUND:
+                return "absent", None
+            return "unknown", None
+        except requests.RequestException:
+            continue
+    return "unknown", None
+
+
 def place_order(credential_id: int, req: OrderRequest) -> OrderResult:
     """Place one order. Sets leverage + margin type first (idempotent).
 
@@ -151,6 +183,7 @@ def place_order(credential_id: int, req: OrderRequest) -> OrderResult:
         return result
 
     # ---- place the actual order ----
+    client_oid = _new_client_order_id()
     try:
         raw = bn.place_order(
             env, api_key, secret,
@@ -160,11 +193,28 @@ def place_order(credential_id: int, req: OrderRequest) -> OrderResult:
             quantity=req.quantity,
             price=req.price,
             reduce_only=req.reduce_only,
+            new_client_order_id=client_oid,
         )
     except BinanceAPIError as e:
         result = OrderResult(ok=False, error=str(e))
         _record_order(credential_id, env, req, result)
         return result
+    except requests.RequestException as e:
+        # Transport died — the order MAY have reached Binance. Resolve by id.
+        state, raw = _query_order_state(env, api_key, secret, req.symbol, client_oid)
+        if state == "absent":
+            result = OrderResult(ok=False, error=f"网络异常，订单未送达交易所：{e}")
+            _record_order(credential_id, env, req, result)
+            return result
+        if state == "unknown":
+            msg = f"网络异常且订单状态未知（{client_oid}），请立即检查持仓与挂单：{e}"
+            applog("binance_trade", "error", msg)
+            result = OrderResult(ok=False, error=msg)
+            _record_order(credential_id, env, req, result)
+            return result
+        applog("binance_trade", "warn",
+               f"下单请求网络异常，但订单已被交易所接受（{client_oid}）")
+        # state == "exists": fall through with raw from get_order
 
     result = OrderResult(
         ok=True,

@@ -344,6 +344,85 @@ def test_service_place_order_aborts_when_leverage_fails(monkeypatch):
     assert "set_leverage" in result.error
 
 
+def test_service_place_order_sends_client_order_id(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+
+    def fake_order(env, k, s, **kw):
+        captured.update(kw)
+        return {"orderId": 1, "status": "FILLED", "executedQty": "0.001", "avgPrice": "70000"}
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    service.place_order(cred_id, OrderRequest(
+        symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001))
+    oid = captured["new_client_order_id"]
+    assert oid.startswith("wohub-") and len(oid) <= 36
+
+
+def test_service_place_order_network_error_resolved_as_placed(monkeypatch):
+    """Transport died after send, but Binance accepted the order — get_order
+    finds it by clientOrderId and the result is success, not a blind failure."""
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        "trading.binance_client.place_order",
+        lambda *a, **kw: (_ for _ in ()).throw(requests.ConnectionError("reset")))
+
+    def fake_get_order(env, k, s, symbol, order_id=None, orig_client_order_id=None):
+        assert orig_client_order_id.startswith("wohub-")
+        return {"orderId": 55, "status": "FILLED", "executedQty": "0.001", "avgPrice": "70000"}
+
+    monkeypatch.setattr("trading.binance_client.get_order", fake_get_order)
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order(cred_id, OrderRequest(
+        symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001))
+    assert result.ok
+    assert result.binance_order_id == "55"
+
+
+def test_service_place_order_network_error_order_absent_fails_clean(monkeypatch):
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        "trading.binance_client.place_order",
+        lambda *a, **kw: (_ for _ in ()).throw(requests.ConnectionError("reset")))
+    monkeypatch.setattr(
+        "trading.binance_client.get_order",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            BinanceAPIError(code=-2013, msg="Order does not exist.", http_status=400)))
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order(cred_id, OrderRequest(
+        symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001))
+    assert not result.ok
+    assert "未送达" in result.error
+    # failure persisted to the audit log
+    assert service.list_recent_orders(limit=1)[0]["status"] == "FAILED"
+
+
+def test_service_place_order_network_error_unknown_state(monkeypatch):
+    """Both the order and the verification query failed — error must say the
+    state is unknown so the user checks positions immediately."""
+    monkeypatch.setattr("trading.binance_client.set_margin_type", lambda *a, **kw: None)
+    monkeypatch.setattr("trading.binance_client.set_leverage", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        "trading.binance_client.place_order",
+        lambda *a, **kw: (_ for _ in ()).throw(requests.ConnectionError("reset")))
+    monkeypatch.setattr(
+        "trading.binance_client.get_order",
+        lambda *a, **kw: (_ for _ in ()).throw(requests.Timeout("query timed out")))
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.place_order(cred_id, OrderRequest(
+        symbol="BTCUSDT", side="BUY", order_type="MARKET", quantity=0.001))
+    assert not result.ok
+    assert "状态未知" in result.error
+
+
 def test_service_place_order_validates_request():
     cred_id = creds.add_credential("t", "testnet", "K", "S")
     # LIMIT without price -> validate() raises ValueError before any HTTP call

@@ -26,8 +26,6 @@ async def lifespan(app: FastAPI):
         _applog("security", "warn", _msg)
         _bar = "=" * 60
         print(f"\n{_bar}\n⚠️  WoHub: {_msg}\n{_bar}\n", file=sys.stderr, flush=True)
-    from ai.strategy import ensure_default_strategy
-    ensure_default_strategy()
     from api.tasks import start_all_enabled
     start_all_enabled()
     yield

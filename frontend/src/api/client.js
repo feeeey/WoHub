@@ -186,46 +186,6 @@ export const api = {
     return request('/screenshots/cookies/test', { method: 'POST' })
   },
 
-  async getAIConfig() {
-    return request('/ai/config')
-  },
-
-  async updateAIConfig(data) {
-    return request('/ai/config', { method: 'PUT', body: JSON.stringify(data) })
-  },
-
-  async testAIConnection() {
-    return request('/ai/test', { method: 'POST' })
-  },
-
-  async getAISignals() {
-    return request('/ai/signals')
-  },
-
-  async getSignalDetail(id) {
-    return request(`/ai/signals/${id}`)
-  },
-
-  async listStrategies() {
-    return request('/ai/strategies')
-  },
-
-  async createStrategy(data) {
-    return request('/ai/strategies', { method: 'POST', body: JSON.stringify(data) })
-  },
-
-  async updateStrategy(id, data) {
-    return request(`/ai/strategies/${id}`, { method: 'PUT', body: JSON.stringify(data) })
-  },
-
-  async deleteStrategy(id) {
-    return request(`/ai/strategies/${id}`, { method: 'DELETE' })
-  },
-
-  async setDefaultStrategy(id) {
-    return request(`/ai/strategies/${id}/default`, { method: 'POST' })
-  },
-
   async getKlines(symbol, interval, limit = 100, includeCurrent = false) {
     const params = new URLSearchParams({
       symbol,

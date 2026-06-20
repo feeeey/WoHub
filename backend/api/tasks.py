@@ -170,7 +170,6 @@ def delete_task(task_id: int):
         placeholders = ",".join("?" * len(signal_ids))
         db.execute(f"DELETE FROM outcomes WHERE signal_id IN ({placeholders})", signal_ids)
         db.execute(f"DELETE FROM snapshots WHERE signal_id IN ({placeholders})", signal_ids)
-        db.execute(f"DELETE FROM ai_analyses WHERE signal_id IN ({placeholders})", signal_ids)
         db.execute(f"DELETE FROM screenshots WHERE signal_id IN ({placeholders})", signal_ids)
         db.execute(f"DELETE FROM signals WHERE task_id = ?", (task_id,))
     db.execute("DELETE FROM push_logs WHERE task_id = ?", (task_id,))
@@ -241,11 +240,9 @@ def task_history(task_id: int, limit: int = 50):
 
     signals = db.execute("""
         SELECT s.*, snap.price, snap.change_24h, snap.funding_rate,
-               a.analysis_text, a.sentiment,
                o.change_1h, o.change_4h, o.change_24h
         FROM signals s
         LEFT JOIN snapshots snap ON snap.signal_id = s.id
-        LEFT JOIN ai_analyses a ON a.signal_id = s.id
         LEFT JOIN outcomes o ON o.signal_id = s.id
         WHERE s.task_id = ?
         ORDER BY s.triggered_at DESC LIMIT ?

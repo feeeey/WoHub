@@ -154,11 +154,6 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
             clean = sym.replace("BINANCE:", "").replace(".P", "")
             capture_and_dispatch(task_id, clean, resolutions, channel)
 
-    if "ai_analysis" in actions:
-        import threading
-        t = threading.Thread(target=_run_ai_and_edit, args=(task_id, all_signals, channel, message), daemon=True)
-        t.start()
-
 
 def _exec_market_scan(task_id, config, actions, channel):
     from sources.exchanges import fetch_all_tickers
@@ -206,11 +201,6 @@ def _exec_market_scan(task_id, config, actions, channel):
             if len(overlaps[sym]) >= shot_threshold:
                 clean = sym.replace("BINANCE:", "").replace(".P", "")
                 capture_and_dispatch(task_id, clean, resolutions[:1], channel)
-
-    if "ai_analysis" in actions:
-        import threading
-        t = threading.Thread(target=_run_ai_and_edit, args=(task_id, overlaps, channel, message), daemon=True)
-        t.start()
 
 
 def _exec_anomaly_watch(task_id, config, actions, channel):
@@ -277,38 +267,6 @@ def _exec_scheduled_shot(task_id, config, actions, channel):
 
     for sym in symbols:
         capture_and_dispatch(task_id, sym, timeframes, channel)
-
-
-def _run_ai_and_edit(task_id, overlaps, channel, push_message):
-    try:
-        from actions.ai_analysis import run_ai_analysis
-
-        db = get_db(settings.db_path)
-        recent_signals = db.execute(
-            "SELECT id, symbol FROM signals WHERE task_id = ? ORDER BY triggered_at DESC LIMIT 3",
-            (task_id,),
-        ).fetchall()
-        db.close()
-
-        ai_texts = []
-        for sig in recent_signals:
-            text = run_ai_analysis(sig["id"])
-            if text:
-                ai_texts.append(f"[{sig['symbol']}] {text}")
-
-        if ai_texts and channel:
-            ai_section = "\n\n🤖 AI 分析：\n" + "\n\n".join(ai_texts)
-            try:
-                from channels.telegram import TelegramChannel
-                ch = TelegramChannel(
-                    bot_token=channel["config"].get("bot_token", ""),
-                    chat_id=channel["config"].get("chat_id", ""),
-                )
-                ch.send_text(ai_section)
-            except Exception as e:
-                print(f"[executor] AI push failed: {e}")
-    except Exception as e:
-        print(f"[executor] AI analysis failed: {e}")
 
 
 def _send_push(channel, text):

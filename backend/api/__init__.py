@@ -5,7 +5,6 @@ from api.market import router as market_router
 from api.channels import router as channels_router
 from api.tasks import router as tasks_router
 from api.settings import router as settings_router
-from api.ai import router as ai_router
 from api.scanner import router as scanner_router
 from api.screenshots import router as screenshots_router
 from api.klines import router as klines_router
@@ -23,7 +22,6 @@ protected.include_router(market_router)
 protected.include_router(channels_router)
 protected.include_router(tasks_router)
 protected.include_router(settings_router)
-protected.include_router(ai_router)
 protected.include_router(scanner_router)
 protected.include_router(screenshots_router)
 protected.include_router(klines_router)

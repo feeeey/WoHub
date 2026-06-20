@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-WoHub is a cryptocurrency trading signal aggregation platform. It runs TradingView Pine Screeners against watchlists, detects signals across multiple timeframes, optionally analyzes them with an LLM, and pushes notifications to Telegram/Discord.
+WoHub is a cryptocurrency trading signal aggregation platform. It runs TradingView Pine Screeners against watchlists, detects signals across multiple timeframes, and pushes notifications to Telegram/Discord. It also includes a Binance USDT-M futures trading terminal (structure-based position planning + bracket orders with stop-loss recovery).
 
 ## Commands
 
@@ -40,13 +40,14 @@ pytest -m "not network"       # Skip live API tests
 
 ### Key directories
 
-- `backend/api/` — FastAPI routers: health, market, channels, tasks, settings, ai
+- `backend/api/` — FastAPI routers: health, market, channels, tasks, settings, scanner, screenshots, klines, trading
 - `backend/sources/` — Data fetching: `pine_screener.py` (TradingView), individual exchange clients (Binance, OKX, Bybit, Bitget), `chart_shot_client.py`
 - `backend/tasks/` — `scheduler.py` (APScheduler cron/interval jobs), `executor.py` (task execution pipeline), `tracker.py` (signal outcome tracking at 1h/4h/24h)
 - `backend/channels/` — Notification dispatch: `telegram.py`, `discord.py`, `sender.py`
-- `backend/ai/` — LLM integration: OpenAI-compatible client with SSE streaming, context builder, strategy management
+- `backend/trading/` — Binance USDT-M client, credential encryption, order service (bracket + SL recovery), position planning
+- `backend/klines/` — Candlestick fetch, pattern detection, classification, market structure (pivots, ATR)
 - `backend/screeners/` — JSON configs for Pine screener filters (oscillator/, trend/)
-- `frontend/src/views/` — Vue pages: Tasks, Market, Channels, Settings, AI, Login
+- `frontend/src/views/` — Vue pages: Tasks, Scanner, Market, Trade, Channels, Settings, Login
 - `services/chartshot/` — Standalone screenshot microservice
 
 ### Task execution flow
@@ -55,12 +56,12 @@ pytest -m "not network"       # Skip live API tests
 2. `executor.py` calls `pine_screener.run_screener()` for each screener x timeframe combo (rate-limited: 1 req/2 sec)
 3. Cross-analysis: detects multi-screener overlap and multi-timeframe confluence
 4. Sends results via configured channel (Telegram/Discord)
-5. Optionally runs LLM analysis and/or captures ChartShot screenshots
+5. Optionally captures ChartShot screenshots
 6. Persists signals, snapshots, push logs to SQLite
 
 ### Database
 
-Single SQLite file at `data/wohub.db`. Schema defined in `backend/database.py` (SCHEMA constant). Key tables: channels, tasks, signals, snapshots, outcomes, push_logs, screenshots, ai_config, strategies, ai_analyses.
+Single SQLite file at `data/wohub.db`. Schema defined in `backend/database.py` (SCHEMA constant). Key tables: channels, tasks, signals, snapshots, outcomes, push_logs, screenshots, trading_credentials, trading_orders.
 
 ### Auth
 

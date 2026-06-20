@@ -4,7 +4,6 @@ import Tasks from '../views/Tasks.vue'
 import Market from '../views/Market.vue'
 import Channels from '../views/Channels.vue'
 import Settings from '../views/Settings.vue'
-import AI from '../views/AI.vue'
 import Scanner from '../views/Scanner.vue'
 import Trade from '../views/Trade.vue'
 
@@ -19,7 +18,6 @@ const routes = [
   { path: '/klines', redirect: '/trade' },
   { path: '/channels', component: Channels },
   { path: '/settings', component: Settings },
-  { path: '/ai', component: AI },
 ]
 
 const router = createRouter({

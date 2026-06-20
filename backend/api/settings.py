@@ -86,7 +86,6 @@ def get_proxy():
         "scope": [
             "交易所 API（Binance, OKX, Bybit, Bitget）",
             "TradingView Pine 筛选 API",
-            "AI API（如使用海外服务）",
         ],
     }
 

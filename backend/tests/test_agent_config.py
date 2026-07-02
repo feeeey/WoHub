@@ -36,3 +36,25 @@ def test_load_config_decrypts_key():
                  "max_tokens": 4096})
     cfg = load_config()
     assert cfg.api_key == "k123" and cfg.provider == "anthropic" and cfg.enabled
+
+
+@pytest.mark.asyncio
+async def test_put_without_key_preserves_stored_key(client):
+    body = {"provider": "openai", "base_url": "", "model": "m", "enabled": False,
+            "max_tool_calls": 15, "deep_dive_limit": 5, "cooldown_minutes": 240,
+            "push_verdict": False, "credential_id": None, "max_tokens": 4096}
+    async with client as c:
+        await c.put("/api/agent/config", json={**body, "api_key": "sk-keep"})
+        r = await c.put("/api/agent/config", json={**body, "api_key": None})
+    assert r.json()["has_api_key"] is True
+
+
+@pytest.mark.asyncio
+async def test_put_empty_string_clears_key(client):
+    body = {"provider": "openai", "base_url": "", "model": "m", "enabled": False,
+            "max_tool_calls": 15, "deep_dive_limit": 5, "cooldown_minutes": 240,
+            "push_verdict": False, "credential_id": None, "max_tokens": 4096}
+    async with client as c:
+        await c.put("/api/agent/config", json={**body, "api_key": "sk-gone"})
+        r = await c.put("/api/agent/config", json={**body, "api_key": ""})
+    assert r.json()["has_api_key"] is False

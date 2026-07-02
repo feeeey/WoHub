@@ -35,7 +35,7 @@ def load_config() -> AgentConfig:
     try:
         _ensure_row(db)
         db.commit()
-        row = db.execute("SELECT * FROM agent_config WHERE id = 1").fetchone()
+        row = dict(db.execute("SELECT * FROM agent_config WHERE id = 1").fetchone())
     finally:
         db.close()
     key = decrypt_secret(row["api_key_enc"]) if row["api_key_enc"] else None
@@ -61,7 +61,11 @@ def save_config(data: dict) -> None:
             sets.append(f"{f} = ?")
             v = data[f]
             params.append(int(v) if isinstance(v, bool) else v)
-        if data.get("api_key"):
+        # 空串 = 显式清除已存密钥；None/缺省 = 不改动
+        if "api_key" in data and data["api_key"] == "":
+            sets.append("api_key_enc = ?")
+            params.append(None)
+        elif data.get("api_key"):
             sets.append("api_key_enc = ?")
             params.append(encrypt_secret(data["api_key"]))
         if sets:

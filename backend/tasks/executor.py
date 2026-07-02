@@ -317,9 +317,16 @@ def _enqueue_agent_run(task_id, batch, decisions, signal_id_map, actions):
         snaps = agent_tools.market_snapshot(sorted({c["symbol"] for c in candidates}))
         for c in candidates:
             c["snapshot"] = snaps.get(c["symbol"])
+        results = []
+        for r in batch.results:
+            syms = r["symbols"]
+            if len(syms) > 50:
+                applog("agent", "info",
+                       f"context symbols capped 50/{len(syms)} for {r['label']} {r['resolution']}")
+            results.append({"label": r["label"], "resolution": r["resolution"],
+                            "symbols": syms[:50]})
         context = {"task_id": task_id, "task_type": batch.task_type,
-                   "results": [{"label": r["label"], "resolution": r["resolution"],
-                                "symbols": r["symbols"][:50]} for r in batch.results],
+                   "results": results,
                    "cross": batch.cross, "bias_map": batch.bias_map,
                    "candidates": candidates}
         enqueue_run(task_id, context)

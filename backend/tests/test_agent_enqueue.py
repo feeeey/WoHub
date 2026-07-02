@@ -55,3 +55,24 @@ def test_enqueue_respects_enabled_and_action(reset_db):
     assert ctx["candidates"][0]["symbol"] == "BTCUSDT"
     assert ctx["candidates"][0]["signal_ids"] == [42]
     assert ctx["candidates"][0]["snapshot"]["priceChangePercent"] == 2.0
+
+
+def test_market_scan_handler_enqueues(reset_db):
+    """端到端：_exec_market_scan 在 agent_decide + enabled 时入队（第二调用点回归守护）。"""
+    from unittest.mock import patch
+    from tasks import executor
+    from agent.config import save_config
+    save_config({"provider": "openai", "model": "m", "api_key": "k", "enabled": True,
+                 "base_url": "", "max_tokens": 4096, "max_tool_calls": 15,
+                 "deep_dive_limit": 5, "cooldown_minutes": 240, "push_verdict": False,
+                 "credential_id": None})
+    config = {"screeners": [{"folder_type": "oscillator", "screener_name": "oversold_zone", "label": "超卖"},
+                            {"folder_type": "oscillator", "screener_name": "divergence_bottom", "label": "底背离"}],
+              "resolutions": ["1h"], "overlap_threshold": 2, "watchlist_id": 0}
+    with patch.object(executor, "run_screener", return_value=["BINANCE:BTCUSDT.P"]), \
+         patch.object(executor, "record_snapshot"), \
+         patch.object(executor, "schedule_outcome_tracking"), \
+         patch("agent.tools.market_snapshot", return_value={"BTCUSDT": {"lastPrice": 1.0,
+               "priceChangePercent": 0.0, "volume24h": 1.0, "fundingRate": None}}):
+        executor._exec_market_scan(None, config, ["agent_decide"], None)
+    assert _count() == 1

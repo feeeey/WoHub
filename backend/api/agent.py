@@ -8,6 +8,8 @@ from database import get_db
 
 router = APIRouter(prefix="/agent")
 
+MIN_RELIABLE_N = 20   # 沿用量化层 P1 纪律：样本不足的格子显式标注
+
 
 def _safe_json(s):
     try:
@@ -117,3 +119,49 @@ def rate_decision(decision_id: int, body: RateBody):
     finally:
         db.close()
     return {"ok": True}
+
+
+@router.get("/stats")
+def stats():
+    """方向感知胜率：long 赢=涨，short 赢=跌；skip 不计。
+    按 decider × confidence 桶 × horizon 聚合；rule 基线 confidence 为 NULL，单独成桶。"""
+    db = get_db(settings.db_path)
+    try:
+        rows = db.execute(
+            """SELECT r.decider, d.direction, d.confidence,
+                      o.change_1h, o.change_4h, o.change_24h
+               FROM agent_decisions d
+               JOIN agent_runs r ON r.id = d.run_id
+               LEFT JOIN outcomes o ON o.signal_id = d.signal_id
+               WHERE d.direction != 'skip' AND d.signal_id IS NOT NULL""").fetchall()
+    finally:
+        db.close()
+
+    def bucket(conf):
+        if conf is None:
+            return "rule"
+        if conf >= 0.7:
+            return ">=0.7"
+        if conf >= 0.5:
+            return "0.5-0.7"
+        return "<0.5"
+
+    acc = {}   # (decider, bucket, horizon) -> [n, wins, sum_signed]
+    for r in rows:
+        b = bucket(r["confidence"])
+        sign = 1 if r["direction"] == "long" else -1
+        for h in ("1h", "4h", "24h"):
+            chg = r[f"change_{h}"]
+            if chg is None:
+                continue
+            key = (r["decider"], b, h)
+            n, w, s = acc.get(key, (0, 0, 0.0))
+            acc[key] = (n + 1, w + (1 if sign * chg > 0 else 0), s + sign * chg)
+
+    groups = [{"decider": k[0], "bucket": k[1], "horizon": k[2],
+               "n": v[0], "wins": v[1],
+               "win_rate": round(v[1] / v[0], 4) if v[0] else None,
+               "avg_signed_change": round(v[2] / v[0], 4) if v[0] else None,
+               "reliable": v[0] >= MIN_RELIABLE_N}
+              for k, v in sorted(acc.items())]
+    return {"groups": groups, "min_reliable_n": MIN_RELIABLE_N}

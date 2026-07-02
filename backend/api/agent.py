@@ -135,6 +135,7 @@ def stats():
                FROM agent_decisions d
                JOIN agent_runs r ON r.id = d.run_id
                LEFT JOIN outcomes o ON o.signal_id = d.signal_id
+               -- signal_id IS NULL 的裁决（信号落库失败的降级路径）无 outcome 可关联，不计入统计
                WHERE d.direction != 'skip' AND d.signal_id IS NOT NULL""").fetchall()
     finally:
         db.close()

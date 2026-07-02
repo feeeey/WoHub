@@ -144,7 +144,7 @@
 
                         <!-- Reasons -->
                         <div v-if="d.reasons" class="reasons-block">
-                          <div v-for="(r, i) in d.reasons" :key="i" class="reason-line">· {{ r }}</div>
+                          <div v-for="(r, i) in splitReasons(d.reasons)" :key="i" class="reason-line">· {{ r }}</div>
                         </div>
 
                         <!-- Factors table -->
@@ -438,6 +438,11 @@ function directionBadge(d) {
   if (d === 'long') return 'dir-long'
   if (d === 'short') return 'dir-short'
   return 'dir-skip'
+}
+
+function splitReasons(reasons) {
+  if (!reasons) return []
+  return String(reasons).split('\n').map(s => s.trim()).filter(Boolean)
 }
 
 function confidencePct(v) {

@@ -105,6 +105,54 @@ CREATE TABLE IF NOT EXISTS trading_orders (
     error_message TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS outcome_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id INTEGER REFERENCES signals(id),
+    horizon TEXT NOT NULL CHECK (horizon IN ('1h', '4h', '24h')),
+    due_at TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_outcome_checks_due ON outcome_checks(done, due_at);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER REFERENCES tasks(id),
+    decider TEXT NOT NULL CHECK (decider IN ('agent', 'rule')),
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued', 'running', 'done', 'failed')),
+    context_json TEXT,
+    trace_json TEXT,
+    model TEXT,
+    prompt_version TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id, created_at);
+
+CREATE TABLE IF NOT EXISTS agent_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER REFERENCES agent_runs(id),
+    signal_id INTEGER REFERENCES signals(id),
+    signal_ids_json TEXT,
+    symbol TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('long', 'short', 'skip')),
+    confidence REAL,
+    reasons TEXT,
+    factors_json TEXT,
+    human_rating INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_decisions_symbol ON agent_decisions(symbol, timeframe, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_decisions_run ON agent_decisions(run_id);
 """
 
 

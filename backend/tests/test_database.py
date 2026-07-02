@@ -110,4 +110,5 @@ def test_init_db_is_idempotent():
         conn.close()
         # 7 core tables (channels, tasks, signals, snapshots, outcomes, push_logs,
         # screenshots) + 2 trading tables (trading_credentials, trading_orders)
-        assert len(tables) == 9
+        # + 3 agent tables (outcome_checks, agent_runs, agent_decisions)
+        assert len(tables) == 12

@@ -146,7 +146,7 @@ def _exec_market_scan(task_id, config, actions, channel):
 
     screeners = config.get("screeners", [])
     resolutions = config.get("resolutions", ["1h"])
-    overlap_threshold = config.get("overlap_threshold", 2)
+    overlap_threshold = config.get("overlap_threshold", 2)  # 仅用于消息文案；过滤阈值由 RuleDecider 从 config 读取
     watchlist_id = config.get("watchlist_id", 0)
 
     all_results = []

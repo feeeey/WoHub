@@ -41,3 +41,13 @@ def test_decisions_skip_on_conflicting_bias():
     b = _batch()
     b.bias_map = {"底背离": "long", "超卖": "short"}
     assert RuleDecider().decide(b).decisions[0].direction == "skip"
+
+
+def test_watchlist_empty_results_yields_empty_per_res():
+    b = SignalBatch(task_id=1, task_type="watchlist_signal",
+                    config={"resolutions": ["1h", "4h"], "overlap_threshold": 2,
+                            "screeners": [{}, {}]},
+                    results=[])
+    out = RuleDecider().decide(b)
+    assert out.signals_by_res == {"1h": {}, "4h": {}}
+    assert out.decisions == []

@@ -14,7 +14,10 @@ SCREENER_BIAS = {
 
 
 def bias_map_for(screeners: list[dict]) -> dict[str, str]:
-    """label -> 'long'|'short' from task config screeners list."""
+    """label -> 'long'|'short' from task config screeners list.
+
+    同名 label 后写覆盖前写——任务配置必须保证方向对立的筛选器不共用同一 label。
+    """
     out = {}
     for sc in screeners:
         key = f"{sc.get('folder_type', '')}/{sc.get('screener_name', '')}"
@@ -30,7 +33,7 @@ class SignalBatch:
     config: dict                      # task config (resolutions, overlap_threshold, screeners...)
     results: list                     # [{label, resolution, symbols, count}]
     bias_map: dict = field(default_factory=dict)
-    cross: dict = field(default_factory=dict)   # build_cross_analysis output (market_scan)
+    cross: dict = field(default_factory=dict)   # build_cross_analysis output; if empty, populated (written back) by RuleDecider._market_scan during decide() for downstream reuse
 
 
 @dataclass
@@ -40,14 +43,14 @@ class Decision:
     direction: str       # long | short | skip
     confidence: float | None
     reasons: str
-    labels: list
+    labels: list[str]
 
 
 @dataclass
 class DeciderOutput:
     signals_by_res: dict = field(default_factory=dict)  # watchlist: {res: {sym: [labels]}}
     overlaps: dict = field(default_factory=dict)        # market_scan: {sym: [labels]}
-    decisions: list = field(default_factory=list)
+    decisions: list[Decision] = field(default_factory=list)
 
 
 def _rule_decision(sym, res, labels, bias_map, reason):
@@ -59,6 +62,7 @@ def _rule_decision(sym, res, labels, bias_map, reason):
 
 class RuleDecider:
     def decide(self, batch: SignalBatch) -> DeciderOutput:
+        """Decide on signal batch. market_scan 批会把交叉分析结果回填到 batch.cross（写副作用）。"""
         if batch.task_type == "market_scan":
             return self._market_scan(batch)
         return self._watchlist(batch)

@@ -9,6 +9,7 @@ from api.scanner import router as scanner_router
 from api.screenshots import router as screenshots_router
 from api.klines import router as klines_router
 from api.trading import router as trading_router
+from api.agent import router as agent_router
 
 api_router = APIRouter(prefix="/api")
 
@@ -26,4 +27,5 @@ protected.include_router(scanner_router)
 protected.include_router(screenshots_router)
 protected.include_router(klines_router)
 protected.include_router(trading_router)
+protected.include_router(agent_router)
 api_router.include_router(protected)

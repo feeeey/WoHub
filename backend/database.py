@@ -153,6 +153,22 @@ CREATE TABLE IF NOT EXISTS agent_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_decisions_symbol ON agent_decisions(symbol, timeframe, created_at);
 CREATE INDEX IF NOT EXISTS idx_agent_decisions_run ON agent_decisions(run_id);
+
+CREATE TABLE IF NOT EXISTS agent_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    provider TEXT NOT NULL DEFAULT 'openai' CHECK (provider IN ('openai', 'anthropic')),
+    base_url TEXT NOT NULL DEFAULT '',
+    api_key_enc TEXT,
+    model TEXT NOT NULL DEFAULT '',
+    max_tokens INTEGER NOT NULL DEFAULT 4096,
+    max_tool_calls INTEGER NOT NULL DEFAULT 15,
+    deep_dive_limit INTEGER NOT NULL DEFAULT 5,
+    cooldown_minutes INTEGER NOT NULL DEFAULT 240,
+    credential_id INTEGER,
+    push_verdict INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

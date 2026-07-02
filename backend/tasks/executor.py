@@ -141,6 +141,8 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
     except Exception as e:
         applog("agent", "warn", f"baseline record failed: {e}")
 
+    _enqueue_agent_run(task_id, batch, rule_out.decisions, signal_id_map, actions)
+
     if "chart_shot" in actions and channel:
         for sym in list(all_signals.keys())[:3]:
             clean = sym.replace("BINANCE:", "").replace(".P", "")
@@ -196,6 +198,8 @@ def _exec_market_scan(task_id, config, actions, channel):
         record_rule_run(task_id, rule_out.decisions, signal_id_map)
     except Exception as e:
         applog("agent", "warn", f"baseline record failed: {e}")
+
+    _enqueue_agent_run(task_id, batch, rule_out.decisions, signal_id_map, actions)
 
     if "chart_shot" in actions and channel and overlaps:
         shot_threshold = config.get("screenshot_threshold", 3)
@@ -289,6 +293,38 @@ def _log_push(task_id, channel, content, status="success", error=None):
         db.close()
     except Exception:
         pass
+
+
+def _enqueue_agent_run(task_id, batch, decisions, signal_id_map, actions):
+    """actions 含 agent_decide 且 agent 启用时，把批上下文入队给 worker。
+    快照在入队时采集（15s TTL 缓存，代价极低）。失败不影响主流程。"""
+    if "agent_decide" not in actions:
+        return
+    try:
+        from agent.config import load_config
+        from agent.queue import enqueue_run
+        from agent import tools as agent_tools
+        cfg = load_config()
+        if not cfg.enabled:
+            return
+        candidates = []
+        for d in decisions:
+            clean = d.symbol.replace("BINANCE:", "").replace(".P", "")
+            candidates.append({"symbol": clean, "timeframe": d.timeframe, "labels": d.labels,
+                               "signal_ids": signal_id_map.get((clean, d.timeframe), [])})
+        if not candidates:
+            return
+        snaps = agent_tools.market_snapshot(sorted({c["symbol"] for c in candidates}))
+        for c in candidates:
+            c["snapshot"] = snaps.get(c["symbol"])
+        context = {"task_id": task_id, "task_type": batch.task_type,
+                   "results": [{"label": r["label"], "resolution": r["resolution"],
+                                "symbols": r["symbols"][:50]} for r in batch.results],
+                   "cross": batch.cross, "bias_map": batch.bias_map,
+                   "candidates": candidates}
+        enqueue_run(task_id, context)
+    except Exception as e:
+        applog("agent", "warn", f"agent enqueue failed: {e}")
 
 
 def _record_signals(task_id, entries):

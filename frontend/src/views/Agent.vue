@@ -42,7 +42,7 @@
             <template v-for="run in runs" :key="run.id">
               <tr class="run-row" :class="{ 'run-row-selected': expandedRunId === run.id }"
                   @click="toggleExpand(run.id)">
-                <td class="col-time">{{ formatTime(run.started_at) }}</td>
+                <td class="col-time">{{ formatTime(run.created_at) }}</td>
                 <td class="col-task">{{ run.task_name || '-' }}</td>
                 <td>
                   <span class="badge" :class="statusBadge(run.status)">
@@ -137,24 +137,25 @@
                           </button>
                         </div>
 
-                        <!-- Tool trace -->
-                        <details class="trace-details" v-if="currentDetail.trace">
-                          <summary class="trace-summary">工具轨迹</summary>
-                          <div v-if="currentDetail.trace.reused && currentDetail.trace.reused.length"
-                               class="trace-reused">
-                            复用裁决 #{{ currentDetail.trace.reused.join(', #') }}
-                          </div>
-                          <div v-if="currentDetail.trace.steps && currentDetail.trace.steps.length"
-                               class="trace-steps">
-                            <div v-for="(step, si) in currentDetail.trace.steps" :key="si" class="trace-step">
-                              <span class="trace-tool">{{ step.tool }}</span>
-                              <pre class="trace-args">{{ truncate(JSON.stringify(step.args), 200) }}</pre>
-                              <pre class="trace-result">{{ truncate(String(step.result ?? ''), 300) }}</pre>
-                            </div>
-                          </div>
-                        </details>
                       </div>
                     </div>
+
+                    <!-- Tool trace (once per run, not per decision) -->
+                    <details class="trace-details" v-if="currentDetail && currentDetail.trace">
+                      <summary class="trace-summary">工具轨迹</summary>
+                      <div v-if="currentDetail.trace.reused && currentDetail.trace.reused.length"
+                           class="trace-reused">
+                        复用裁决 #{{ currentDetail.trace.reused.join(', #') }}
+                      </div>
+                      <div v-if="currentDetail.trace.steps && currentDetail.trace.steps.length"
+                           class="trace-steps">
+                        <div v-for="(step, si) in currentDetail.trace.steps" :key="si" class="trace-step">
+                          <span class="trace-tool">{{ step.tool }}</span>
+                          <pre class="trace-args">{{ truncate(JSON.stringify(step.args), 200) }}</pre>
+                          <pre class="trace-result">{{ truncate(String(step.result ?? ''), 300) }}</pre>
+                        </div>
+                      </div>
+                    </details>
 
                     <!-- No decisions yet -->
                     <div v-else-if="currentDetail && !detailLoading && run.status !== 'failed'"
@@ -262,6 +263,8 @@ async function doRerun(id) {
   try {
     await api.rerunAgentRun(id)
     await loadRuns()
+    expandedRunId.value = null
+    currentDetail.value = null
   } catch (e) {
     errorMsg.value = '重跑失败: ' + e.message
   } finally {
@@ -294,8 +297,8 @@ function formatTime(t) {
 }
 
 function tokenLabel(run) {
-  const i = run.tokens_in ?? 0
-  const o = run.tokens_out ?? 0
+  const i = run.input_tokens ?? 0
+  const o = run.output_tokens ?? 0
   if (!i && !o) return '-'
   return `${i}+${o}`
 }
@@ -326,7 +329,8 @@ function directionBadge(d) {
 
 function confidencePct(v) {
   if (v == null) return '-'
-  return (v * 100).toFixed(0) + '%'
+  const n = parseFloat(v)
+  return Number.isFinite(n) ? (n * 100).toFixed(0) + '%' : '-'
 }
 
 function fmtChange(v) {

@@ -23,6 +23,7 @@ def test_record_rule_run_writes_run_and_decisions():
                           confidence=None, reasons="规则：2 个筛选器命中（阈值 2）", labels=["底背离", "超卖"])]
     id_map = {("AUSDT", "1h"): [sid1, sid2]}
     run_id = record_rule_run(task_id=None, decisions=decisions, signal_id_map=id_map)
+    assert run_id is not None
     db = get_db(os.environ["DB_PATH"])
     run = db.execute("SELECT decider, status FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
     d = db.execute("SELECT * FROM agent_decisions WHERE run_id = ?", (run_id,)).fetchone()

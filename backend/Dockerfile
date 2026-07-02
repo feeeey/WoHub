@@ -10,6 +10,11 @@ RUN npm run build
 FROM python:3.13-slim
 WORKDIR /app
 
+# Override on networks where pypi.org is unreachable (e.g. China mirrors);
+# ENV so pip's build-isolation subprocesses inherit it too
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+
 COPY backend/pyproject.toml ./
 RUN pip install --no-cache-dir .
 

@@ -1,7 +1,8 @@
 """
 Signal outcome tracker.
-After a signal is recorded, schedules delayed price lookups to track
-what happened after the signal fired (1h, 4h, 24h later).
+After a signal is recorded, persists due-check rows (1h/4h/24h) into
+outcome_checks; the outcome poller thread executes them when due and
+writes results into outcomes. Restart-safe (no in-memory timers).
 """
 from database import get_db
 from config import settings
@@ -58,7 +59,7 @@ def schedule_outcome_tracking(signal_id, symbol, exchange):
     db.close()
 
 
-def run_outcome_check(signal_id, symbol, exchange, period) -> "str | None":
+def run_outcome_check(signal_id, symbol, exchange, period) -> str | None:
     """Check price outcome for a signal at the given horizon period.
 
     Returns None on success, or an error string describing what went wrong.
@@ -81,8 +82,10 @@ def run_outcome_check(signal_id, symbol, exchange, period) -> "str | None":
                 "SELECT price FROM snapshots WHERE signal_id = ?", (signal_id,)
             ).fetchone()
 
-            if not snap or not snap["price"]:
-                return "snapshot missing or price=0"
+            if not snap:
+                return f"snapshot missing for signal {signal_id}"
+            if not snap["price"]:
+                return f"snapshot price=0 for signal {signal_id}"
 
             original_price = snap["price"]
             change_pct = ((current_price - original_price) / original_price) * 100

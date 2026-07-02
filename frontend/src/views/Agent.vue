@@ -7,6 +7,63 @@
 
     <div v-if="errorMsg" class="error-bar">{{ errorMsg }}</div>
 
+    <!-- 决策质量统计卡片 -->
+    <div class="card stats-card" style="margin-bottom: 24px">
+      <div class="stats-header">
+        <span class="stats-title">决策质量</span>
+        <span class="stats-subtitle">rule 基线 vs Agent 置信区间胜率对比</span>
+      </div>
+
+      <!-- 加载中 -->
+      <div v-if="statsLoading" class="stats-empty">加载统计中…</div>
+
+      <!-- 加载错误 -->
+      <div v-else-if="statsError" class="stats-error">{{ statsError }}</div>
+
+      <!-- 空态 -->
+      <div v-else-if="statsGroups.length === 0" class="stats-empty">
+        暂无可统计的裁决结果——需要裁决关联到已追踪 outcome 的信号
+      </div>
+
+      <!-- 统计表格 -->
+      <div v-else class="stats-table-wrap">
+        <table class="stats-table">
+          <thead>
+            <tr>
+              <th class="col-decider">裁决方</th>
+              <th class="col-bucket">置信区间</th>
+              <th v-for="hz in HORIZONS" :key="hz" class="col-hz">{{ hz }} 胜率</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template v-for="row in statsRows" :key="row.key">
+              <tr :class="['stats-row', row.decider === 'rule' ? 'row-rule' : 'row-agent']">
+                <td class="col-decider">
+                  <span :class="['decider-tag', row.decider === 'rule' ? 'tag-rule' : 'tag-agent']">
+                    {{ row.decider === 'rule' ? '规则' : 'Agent' }}
+                  </span>
+                </td>
+                <td class="col-bucket">{{ bucketLabel(row.bucket) }}</td>
+                <td v-for="hz in HORIZONS" :key="hz" class="col-hz">
+                  <div v-if="cellData(row, hz)" class="stat-cell" :class="{ 'cell-unreliable': !cellData(row, hz).reliable }">
+                    <span class="cell-rate" :class="rateClass(cellData(row, hz).win_rate)">
+                      {{ fmtPct(cellData(row, hz).win_rate) }}
+                    </span>
+                    <span class="cell-change" :class="changeSign(cellData(row, hz).avg_signed_change)">
+                      {{ fmtSignedPct(cellData(row, hz).avg_signed_change) }}
+                    </span>
+                    <span class="cell-n">(n={{ cellData(row, hz).n }})</span>
+                    <span v-if="!cellData(row, hz).reliable" class="unreliable-badge">样本不足</span>
+                  </div>
+                  <span v-else class="cell-empty">-</span>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Runs list card -->
     <div class="card" style="margin-bottom: 24px">
       <div class="runs-toolbar">
@@ -174,7 +231,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api/client.js'
 
@@ -188,6 +245,62 @@ const expandedRunId = ref(null)
 const currentDetail = ref(null)
 const detailLoading = ref(false)
 const rerunning = ref(false)
+
+// ---- stats card ----
+
+const statsLoading = ref(false)
+const statsError = ref('')
+const statsGroups = ref([])
+
+// bucket 排列顺序
+const BUCKET_ORDER = ['rule', '<0.5', '0.5-0.7', '>=0.7']
+const HORIZONS = ['1h', '4h', '24h']
+
+// 每行 = decider×bucket 组合（rule 行在前，agent 行按置信区间排列）
+const statsRows = computed(() => {
+  const seen = new Set()
+  const rows = []
+  // rule 行：bucket 固定为 'rule'
+  const hasRule = statsGroups.value.some(g => g.decider === 'rule')
+  if (hasRule) {
+    const key = 'rule|rule'
+    if (!seen.has(key)) {
+      seen.add(key)
+      rows.push({ key, decider: 'rule', bucket: 'rule' })
+    }
+  }
+  // agent 行：按置信区间顺序
+  for (const bucket of ['<0.5', '0.5-0.7', '>=0.7']) {
+    if (statsGroups.value.some(g => g.decider === 'agent' && g.bucket === bucket)) {
+      const key = `agent|${bucket}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        rows.push({ key, decider: 'agent', bucket })
+      }
+    }
+  }
+  return rows
+})
+
+function cellData(row, horizon) {
+  return statsGroups.value.find(
+    g => g.decider === row.decider && g.bucket === row.bucket && g.horizon === horizon
+  ) ?? null
+}
+
+async function loadStats() {
+  statsLoading.value = true
+  statsError.value = ''
+  try {
+    const data = await api.getAgentStats()
+    statsGroups.value = data?.groups ?? []
+  } catch (e) {
+    statsError.value = '统计加载失败: ' + e.message
+    statsGroups.value = []
+  } finally {
+    statsLoading.value = false
+  }
+}
 
 const REFRESH_SEC = 10
 let refreshTimer = null
@@ -354,9 +467,45 @@ function truncate(str, max) {
   return str.length > max ? str.slice(0, max) + '…' : str
 }
 
+// ---- stats helpers ----
+
+function bucketLabel(bucket) {
+  if (bucket === 'rule') return '规则基线'
+  if (bucket === '<0.5') return '置信 <50%'
+  if (bucket === '0.5-0.7') return '50%–70%'
+  if (bucket === '>=0.7') return '≥70%'
+  return bucket
+}
+
+function fmtPct(v) {
+  if (v == null) return '-'
+  return Math.round(v * 100) + '%'
+}
+
+function fmtSignedPct(v) {
+  if (v == null) return '-'
+  const sign = v > 0 ? '+' : ''
+  return sign + v.toFixed(2) + '%'
+}
+
+function rateClass(v) {
+  if (v == null) return ''
+  if (v > 0.5) return 'rate-win'
+  if (v < 0.5) return 'rate-loss'
+  return ''
+}
+
+function changeSign(v) {
+  if (v == null) return ''
+  if (v > 0) return 'clr-positive'
+  if (v < 0) return 'clr-negative'
+  return ''
+}
+
 onMounted(() => {
   loadRuns()
   startTimer()
+  loadStats()
 })
 
 onUnmounted(() => {
@@ -770,5 +919,166 @@ onUnmounted(() => {
   padding: 20px;
   color: var(--text-tertiary);
   font-size: 13px;
+}
+
+/* ---- 决策质量统计卡片 ---- */
+
+.stats-card {
+  overflow: hidden;
+}
+
+.stats-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stats-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.stats-subtitle {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.stats-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.stats-error {
+  padding: 10px 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.stats-table-wrap {
+  overflow-x: auto;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.stats-table th {
+  text-align: left;
+  padding: 7px 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.stats-table th.col-hz {
+  text-align: center;
+}
+
+.stats-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  vertical-align: middle;
+}
+
+.stats-table td.col-hz {
+  text-align: center;
+}
+
+.row-rule {
+  background: var(--bg-primary);
+}
+
+.row-agent {
+  background: transparent;
+}
+
+.decider-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tag-rule {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.tag-agent {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.col-bucket {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* 统计格子 */
+.stat-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  line-height: 1.4;
+}
+
+.cell-unreliable {
+  opacity: 0.45;
+  position: relative;
+}
+
+.cell-rate {
+  font-weight: 700;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cell-change {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.cell-n {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.cell-empty {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.unreliable-badge {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+/* 胜率染色 */
+.rate-win {
+  color: var(--success);
+}
+
+.rate-loss {
+  color: var(--danger);
 }
 </style>

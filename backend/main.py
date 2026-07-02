@@ -28,7 +28,10 @@ async def lifespan(app: FastAPI):
         print(f"\n{_bar}\n⚠️  WoHub: {_msg}\n{_bar}\n", file=sys.stderr, flush=True)
     from api.tasks import start_all_enabled
     start_all_enabled()
+    from tasks.outcome_poller import start_poller, stop_poller
+    start_poller()
     yield
+    stop_poller()
     from tasks.scheduler import stop_scheduler
     stop_scheduler()
 

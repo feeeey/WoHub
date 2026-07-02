@@ -269,4 +269,34 @@ export const api = {
   async buildTradingPlan(data) {
     return request('/trading/plan', { method: 'POST', body: JSON.stringify(data) })
   },
+
+  // ---- agent ----
+
+  async getAgentConfig() {
+    return request('/agent/config')
+  },
+
+  async updateAgentConfig(data) {
+    return request('/agent/config', { method: 'PUT', body: JSON.stringify(data) })
+  },
+
+  async listAgentRuns(limit = 50) {
+    return request(`/agent/runs?limit=${limit}`)
+  },
+
+  async getAgentRun(id) {
+    return request(`/agent/runs/${id}`)
+  },
+
+  async rerunAgentRun(id) {
+    return request(`/agent/runs/${id}/rerun`, { method: 'POST' })
+  },
+
+  async rateAgentDecision(id, rating) {
+    return request(`/agent/decisions/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating }) })
+  },
+
+  async getAgentStats() {
+    return request('/agent/stats')
+  },
 }

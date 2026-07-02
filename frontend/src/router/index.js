@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Login from '../views/Login.vue'
 import Tasks from '../views/Tasks.vue'
 import Market from '../views/Market.vue'
+import Agent from '../views/Agent.vue'
 import Channels from '../views/Channels.vue'
 import Settings from '../views/Settings.vue'
 import Scanner from '../views/Scanner.vue'
@@ -16,6 +17,7 @@ const routes = [
   { path: '/trade', component: Trade },
   // backward-compat alias: K线形态 used to live at /klines
   { path: '/klines', redirect: '/trade' },
+  { path: '/agent', component: Agent },
   { path: '/channels', component: Channels },
   { path: '/settings', component: Settings },
 ]

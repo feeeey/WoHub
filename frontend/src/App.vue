@@ -106,6 +106,11 @@ const navItems = [
     icon: '<line x1="6" y1="3" x2="6" y2="21" /><rect x="4" y="7" width="4" height="9" /><line x1="14" y1="3" x2="14" y2="21" /><rect x="12" y="11" width="4" height="6" /><line x1="20" y1="5" x2="20" y2="19" /><rect x="18" y="8" width="4" height="8" />',
   },
   {
+    path: '/agent',
+    label: 'Agent 复盘',
+    icon: '<rect x="3" y="4" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="1.5" /><circle cx="15" cy="10" r="1.5" /><path d="M9 14h6" /><line x1="8" y1="1" x2="8" y2="4" /><line x1="16" y1="1" x2="16" y2="4" />',
+  },
+  {
     path: '/channels',
     label: '推送通道',
     icon: '<path d="M22 2L11 13" /><path d="M22 2L15 22L11 13L2 9L22 2Z" />',

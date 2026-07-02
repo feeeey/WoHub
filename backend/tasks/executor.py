@@ -3,7 +3,8 @@ import traceback
 from datetime import datetime, timezone
 from database import get_db
 from config import settings
-from sources.pine_screener import run_screener, build_cross_analysis
+from sources.pine_screener import run_screener
+from agent.decider import SignalBatch, RuleDecider, bias_map_for
 from channels.sender import send_text
 from screenshots import capture_and_dispatch
 from app_logger import log as applog
@@ -67,7 +68,6 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
     watchlist_id = config.get("watchlist_id", 0)
     screeners = config.get("screeners", [])
     resolutions = config.get("resolutions", ["1h"])
-    overlap_threshold = config.get("overlap_threshold", 2)
     is_single = len(screeners) <= 1
 
     # Run all screener×timeframe combos sequentially (TradingView API: no concurrency)
@@ -86,28 +86,10 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
         _last_results[task_id] = {"results": [], "signals": {}, "message": "无筛选结果"}
         return
 
-    # Build signals per timeframe independently
-    # Timeframes are independent runs; overlap is computed across screeners within each timeframe
-    signals_by_res = {}  # {res: {sym: [label, ...]}}
-    for res in resolutions:
-        res_results = [r for r in all_results if r["resolution"] == res]
-        if is_single:
-            # Single screener: all symbols are signals
-            per_res = {}
-            for r in res_results:
-                for sym in r["symbols"]:
-                    per_res.setdefault(sym, []).append(r["label"])
-            signals_by_res[res] = per_res
-        else:
-            # Multi screener: count how many different screeners hit each symbol
-            sym_screeners = {}
-            for r in res_results:
-                for sym in r["symbols"]:
-                    sym_screeners.setdefault(sym, []).append(r["label"])
-            signals_by_res[res] = {
-                sym: labels for sym, labels in sym_screeners.items()
-                if len(labels) >= overlap_threshold
-            }
+    batch = SignalBatch(task_id=task_id, task_type="watchlist_signal", config=config,
+                        results=all_results, bias_map=bias_map_for(screeners))
+    rule_out = RuleDecider().decide(batch)
+    signals_by_res = rule_out.signals_by_res
 
     # Merge all timeframes into flat signal dict for recording/screenshots
     all_signals = {}  # {sym: [label(res), ...]}
@@ -177,8 +159,10 @@ def _exec_market_scan(task_id, config, actions, channel):
             except Exception as e:
                 print(f"[executor] Screener error: {e}")
 
-    analysis = build_cross_analysis(all_results)
-    overlaps = {sym: labels for sym, labels in analysis.get("screener_overlap", {}).items() if len(labels) >= overlap_threshold}
+    batch = SignalBatch(task_id=task_id, task_type="market_scan", config=config,
+                        results=all_results, bias_map=bias_map_for(screeners))
+    rule_out = RuleDecider().decide(batch)
+    overlaps = rule_out.overlaps
 
     if not overlaps and not all_results:
         return

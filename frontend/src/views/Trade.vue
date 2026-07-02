@@ -361,10 +361,13 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import { createChart, CandlestickSeries, CrosshairMode } from 'lightweight-charts'
 import { api } from '../api/client.js'
 import ClassificationChain from '../components/ClassificationChain.vue'
 import TradeForm from '../components/TradeForm.vue'
+
+const route = useRoute()
 
 // ---- toolbar / klines state ----
 
@@ -792,8 +795,17 @@ onMounted(async () => {
   await loadCredentials()
   await nextTick()
   initChart()
+  // Apply symbol from review-page "去下单" link before loading data
+  if (route.query.symbol) {
+    symbol.value = String(route.query.symbol).toUpperCase()
+  }
   await loadAll()
   startRefresh()
+  // Apply direction after data is loaded; watch([symbol,...]) only resets planResult/loadKlines
+  // and does NOT touch form.side, so this is safe here and won't be overwritten.
+  if (route.query.direction && tradeFormRef.value) {
+    tradeFormRef.value.setDirection(String(route.query.direction))
+  }
 })
 
 onUnmounted(() => {

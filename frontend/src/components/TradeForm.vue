@@ -197,7 +197,14 @@ function applyPlan(plan) {
   }
 }
 
-defineExpose({ applyPlan })
+// Called by Trade.vue when navigating from the review page with a direction query param.
+// Review page uses 'long'/'short'; the form stores 'BUY'/'SELL' internally.
+function setDirection(dir) {
+  if (dir === 'long') form.value.side = 'BUY'
+  else if (dir === 'short') form.value.side = 'SELL'
+}
+
+defineExpose({ applyPlan, setDirection })
 </script>
 
 <style scoped>

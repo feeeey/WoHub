@@ -7,6 +7,7 @@ from sources.pine_screener import run_screener, build_cross_analysis
 from channels.sender import send_text
 from screenshots import capture_and_dispatch
 from app_logger import log as applog
+from tasks.tracker import record_snapshot, schedule_outcome_tracking
 
 # Store last execution result for the test endpoint
 _last_results = {}
@@ -147,7 +148,10 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
         _send_push(channel, message)
         _log_push(task_id, channel, message)
 
-    _record_signals(task_id, all_signals, resolutions, all_results)
+    entries = [(sym, label, res)
+               for res, sigs in signals_by_res.items()
+               for sym, labels in sigs.items() for label in labels]
+    signal_ids = _record_signals(task_id, entries)
 
     if "chart_shot" in actions and channel:
         for sym in list(all_signals.keys())[:3]:
@@ -193,7 +197,9 @@ def _exec_market_scan(task_id, config, actions, channel):
         _send_push(channel, message)
         _log_push(task_id, channel, message)
 
-    _record_signals(task_id, overlaps, resolutions, all_results)
+    entries = [(sym, r["label"], r["resolution"])
+               for r in all_results for sym in r["symbols"] if sym in overlaps]
+    signal_ids = _record_signals(task_id, entries)
 
     if "chart_shot" in actions and channel and overlaps:
         shot_threshold = config.get("screenshot_threshold", 3)
@@ -289,37 +295,32 @@ def _log_push(task_id, channel, content, status="success", error=None):
         pass
 
 
-def _record_signals(task_id, overlaps, resolutions, all_results):
-    """Record signals to the signals table and schedule outcome tracking."""
+def _record_signals(task_id, entries):
+    """entries: list of (raw_symbol, label, resolution) — exact rows to insert.
+    Returns {(clean_symbol, resolution): [signal_id, ...]} for decision linkage."""
+    id_map = {}
     try:
-        from tasks.tracker import record_snapshot, schedule_outcome_tracking
-
-        # Phase 1: Insert all signals in one transaction
         db = get_db(settings.db_path)
-        pending = []  # (signal_id, symbol, exchange)
-        for sym, labels in overlaps.items():
+        pending = []
+        for sym, label, res in entries:
             clean = sym.replace("BINANCE:", "").replace(".P", "")
             exchange = "Binance"
             if "OKX:" in sym:
                 exchange = "OKX"
             elif "BYBIT:" in sym:
                 exchange = "Bybit"
-
-            for label in labels:
-                for res in resolutions:
-                    cursor = db.execute(
-                        "INSERT INTO signals (task_id, symbol, exchange, indicator, timeframe) VALUES (?, ?, ?, ?, ?)",
-                        (task_id, clean, exchange, label, res),
-                    )
-                    pending.append((cursor.lastrowid, clean, exchange))
-
+            cursor = db.execute(
+                "INSERT INTO signals (task_id, symbol, exchange, indicator, timeframe) VALUES (?, ?, ?, ?, ?)",
+                (task_id, clean, exchange, label, res),
+            )
+            pending.append((cursor.lastrowid, clean, exchange))
+            id_map.setdefault((clean, res), []).append(cursor.lastrowid)
         db.commit()
         db.close()
 
-        # Phase 2: Record snapshots after commit (separate DB connections)
         for signal_id, clean, exchange in pending:
             record_snapshot(signal_id, clean, exchange)
             schedule_outcome_tracking(signal_id, clean, exchange)
-
     except Exception as e:
         print(f"[executor] Failed to record signals: {e}")
+    return id_map

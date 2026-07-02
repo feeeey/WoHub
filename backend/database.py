@@ -169,6 +169,8 @@ CREATE TABLE IF NOT EXISTS agent_config (
     enabled INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_outcomes_signal ON outcomes(signal_id);
 """
 
 

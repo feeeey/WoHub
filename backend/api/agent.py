@@ -124,7 +124,9 @@ def rate_decision(decision_id: int, body: RateBody):
 @router.get("/stats")
 def stats():
     """方向感知胜率：long 赢=涨，short 赢=跌；skip 不计。
-    按 decider × confidence 桶 × horizon 聚合；rule 基线 confidence 为 NULL，单独成桶。"""
+    按 decider × confidence 桶 × horizon 聚合；rule 基线 confidence 为 NULL，单独成桶。
+    avg_signed_change: mean(sign × raw_change)，正值 = 平均而言方向正确。
+    win 判定严格：change == 0 对多空双方都计为 loss。"""
     db = get_db(settings.db_path)
     try:
         rows = db.execute(
@@ -156,7 +158,7 @@ def stats():
                 continue
             key = (r["decider"], b, h)
             n, w, s = acc.get(key, (0, 0, 0.0))
-            acc[key] = (n + 1, w + (1 if sign * chg > 0 else 0), s + sign * chg)
+            acc[key] = (n + 1, w + (1 if sign * chg > 0 else 0), s + sign * chg)  # strict: flat(0) = loss
 
     groups = [{"decider": k[0], "bucket": k[1], "horizon": k[2],
                "n": v[0], "wins": v[1],

@@ -67,6 +67,9 @@
             <label class="checkbox-item">
               <input type="checkbox" v-model="form.actions" value="chart_shot" /> 截图推送
             </label>
+            <label class="checkbox-item">
+              <input type="checkbox" v-model="form.actions" value="agent_decide" /> Agent 裁决
+            </label>
           </div>
         </div>
 
@@ -169,7 +172,7 @@
         </div>
         <div class="config-line">
           <span class="config-label">动作</span>
-          <span>{{ (t.actions || []).map(a => a === 'text_summary' ? '文字' : a === 'chart_shot' ? '截图' : a).join(', ') }}</span>
+          <span>{{ (t.actions || []).map(a => a === 'text_summary' ? '文字' : a === 'chart_shot' ? '截图' : a === 'agent_decide' ? 'Agent 裁决' : a).join(', ') }}</span>
         </div>
       </div>
 

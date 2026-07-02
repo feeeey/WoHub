@@ -25,3 +25,10 @@ def test_record_signals_returns_id_map():
         id_map = executor._record_signals(None, [("BINANCE:BTCUSDT.P", "底背离", "1h")])
     assert list(id_map.keys()) == [("BTCUSDT", "1h")]
     assert len(id_map[("BTCUSDT", "1h")]) == 1
+
+
+def test_record_signals_returns_empty_map_on_failure():
+    from tasks import executor
+    with patch.object(executor, "get_db", side_effect=RuntimeError("boom")):
+        id_map = executor._record_signals(None, [("BINANCE:BTCUSDT.P", "底背离", "1h")])
+    assert id_map == {}

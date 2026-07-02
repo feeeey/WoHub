@@ -193,6 +193,126 @@
       </div>
     </div>
 
+    <!-- Agent Configuration -->
+    <div class="card section">
+      <div class="section-header">
+        <h3 class="section-title">Agent 配置</h3>
+        <span class="badge" :class="agentForm.enabled ? 'badge-success' : 'badge-danger'">
+          {{ agentForm.enabled ? '已启用' : '未启用' }}
+        </span>
+      </div>
+      <p class="section-desc">
+        配置 AI Agent，用于自动分析信号并生成交易裁决。API Key 经 Fernet 加密后存储（密钥派生自 <code>SECRET_KEY</code>）。
+      </p>
+
+      <!-- 安全警告条 -->
+      <div v-if="agentInsecureDefaults.length" class="insecure-warning">
+        <strong>⚠ 安全警告：</strong>
+        {{ agentInsecureDefaults.join('、') }} 为默认值——密钥加密形同虚设；且轮换 SECRET_KEY 会作废已存密钥。
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>启用 Agent</label>
+          <label class="toggle-label">
+            <input type="checkbox" v-model="agentForm.enabled" class="toggle-cb" />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span>{{ agentForm.enabled ? '启用' : '禁用' }}</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label>Provider</label>
+          <select v-model="agentForm.provider">
+            <option value="openai">OpenAI 兼容端点</option>
+            <option value="anthropic">Anthropic</option>
+          </select>
+        </div>
+      </div>
+
+      <div v-if="agentForm.provider === 'openai'" class="form-group">
+        <label>Base URL</label>
+        <input
+          v-model="agentForm.base_url"
+          placeholder="https://.../v1，留空使用官方端点"
+        />
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>模型</label>
+          <input v-model="agentForm.model" placeholder="例：gpt-4o / claude-opus-4-5" />
+        </div>
+        <div class="form-group">
+          <label>API Key</label>
+          <div class="api-key-row">
+            <input
+              v-model="agentApiKeyInput"
+              type="password"
+              autocomplete="new-password"
+              :placeholder="agentHasApiKey ? '已保存（留空不修改）' : '请输入 API Key'"
+              class="api-key-input"
+            />
+            <button
+              v-if="agentHasApiKey"
+              class="btn btn-sm btn-danger-outline"
+              @click="clearAgentApiKey"
+              title="清除已存密钥"
+            >清除</button>
+          </div>
+          <div v-if="agentApiKeyClearedFlag" class="key-clear-hint">提交后将清除已存密钥</div>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>max_tokens（256 – 64000）</label>
+          <input v-model.number="agentForm.max_tokens" type="number" min="256" max="64000" />
+        </div>
+        <div class="form-group">
+          <label>max_tool_calls（1 – 50）</label>
+          <input v-model.number="agentForm.max_tool_calls" type="number" min="1" max="50" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>deep_dive_limit（0 – 20）</label>
+          <input v-model.number="agentForm.deep_dive_limit" type="number" min="0" max="20" />
+        </div>
+        <div class="form-group">
+          <label>冷却时间 cooldown_minutes（分钟）</label>
+          <input v-model.number="agentForm.cooldown_minutes" type="number" min="0" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>绑定交易凭据（可选，用于只读仓位规划预览）</label>
+          <select v-model="agentForm.credential_id">
+            <option :value="null">不使用</option>
+            <option v-for="c in tradingCreds" :key="c.id" :value="c.id">
+              {{ c.label }}（{{ c.env === 'mainnet' ? '实盘' : '测试网' }}）
+            </option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>完成后推送裁决摘要</label>
+          <label class="toggle-label">
+            <input type="checkbox" v-model="agentForm.push_verdict" class="toggle-cb" />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span>{{ agentForm.push_verdict ? '推送' : '不推送' }}</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary btn-sm" @click="saveAgentConfig">保存</button>
+      </div>
+      <div v-if="agentMsg" class="action-msg" :class="agentOk ? 'msg-ok' : 'msg-fail'">
+        {{ agentMsg }}
+      </div>
+    </div>
+
     <!-- System Logs -->
     <div class="card section">
       <div class="section-header">
@@ -431,6 +551,75 @@ async function saveProxy(enabled) {
   }
 }
 
+// ---- Agent configuration ----
+const agentForm = ref({
+  enabled: false,
+  provider: 'openai',
+  base_url: '',
+  model: '',
+  max_tokens: 4096,
+  max_tool_calls: 15,
+  deep_dive_limit: 5,
+  cooldown_minutes: 240,
+  credential_id: null,
+  push_verdict: false,
+})
+const agentHasApiKey = ref(false)
+const agentApiKeyInput = ref('')
+const agentApiKeyClearedFlag = ref(false)
+const agentInsecureDefaults = ref([])
+const agentMsg = ref('')
+const agentOk = ref(false)
+
+async function loadAgentConfig() {
+  try {
+    const r = await api.getAgentConfig()
+    agentHasApiKey.value = r.has_api_key || false
+    agentInsecureDefaults.value = r.insecure_defaults || []
+    agentForm.value = {
+      enabled: r.enabled ?? false,
+      provider: r.provider || 'openai',
+      base_url: r.base_url || '',
+      model: r.model || '',
+      max_tokens: r.max_tokens ?? 4096,
+      max_tool_calls: r.max_tool_calls ?? 15,
+      deep_dive_limit: r.deep_dive_limit ?? 5,
+      cooldown_minutes: r.cooldown_minutes ?? 240,
+      credential_id: r.credential_id ?? null,
+      push_verdict: r.push_verdict ?? false,
+    }
+  } catch {}
+}
+
+function clearAgentApiKey() {
+  agentApiKeyInput.value = ''
+  agentApiKeyClearedFlag.value = true
+}
+
+async function saveAgentConfig() {
+  agentMsg.value = ''
+  try {
+    // api_key: null = 不修改；"" = 显式清除；字符串 = 更新
+    let api_key = null
+    if (agentApiKeyClearedFlag.value) {
+      api_key = ''
+    } else if (agentApiKeyInput.value.trim()) {
+      api_key = agentApiKeyInput.value.trim()
+    }
+    const payload = { ...agentForm.value, api_key }
+    const r = await api.updateAgentConfig(payload)
+    agentHasApiKey.value = r.has_api_key || false
+    agentInsecureDefaults.value = r.insecure_defaults || []
+    agentMsg.value = '保存成功'
+    agentOk.value = true
+    agentApiKeyInput.value = ''
+    agentApiKeyClearedFlag.value = false
+  } catch (e) {
+    agentMsg.value = e.message || '保存失败'
+    agentOk.value = false
+  }
+}
+
 // Logs
 const logs = ref([])
 const logSource = ref('')
@@ -451,6 +640,7 @@ onMounted(() => {
   loadChartshotStatus()
   loadProxy()
   loadTradingCreds()
+  loadAgentConfig()
   loadLogs()
 })
 </script>
@@ -684,5 +874,95 @@ onMounted(() => {
   font-weight: 600;
   margin-bottom: 14px;
   color: var(--text-primary);
+}
+
+/* ---- Agent configuration ---- */
+.insecure-warning {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-subtle, var(--danger-subtle));
+  color: var(--warning, var(--danger));
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Toggle switch */
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.toggle-cb {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-track {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  transition: background 0.2s, border-color 0.2s;
+  flex-shrink: 0;
+}
+
+.toggle-cb:checked + .toggle-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: var(--text-secondary);
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.toggle-cb:checked + .toggle-track .toggle-thumb {
+  transform: translateX(16px);
+  background: #fff;
+}
+
+/* API key row */
+.api-key-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.api-key-input {
+  flex: 1;
+}
+
+.btn-danger-outline {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.btn-danger-outline:hover {
+  background: var(--danger-subtle);
+}
+
+.key-clear-hint {
+  font-size: 12px;
+  color: var(--warning, var(--danger));
+  margin-top: 4px;
 }
 </style>

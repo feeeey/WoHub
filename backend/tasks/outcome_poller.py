@@ -26,9 +26,11 @@ def process_due_checks(limit=50) -> int:
     for r in rows:
         err = run_outcome_check(r["signal_id"], r["symbol"], r["exchange"], r["horizon"])
         db = get_db(settings.db_path)
-        db.execute("UPDATE outcome_checks SET done = 1, error = ? WHERE id = ?", (err, r["id"]))
-        db.commit()
-        db.close()
+        try:
+            db.execute("UPDATE outcome_checks SET done = 1, error = ? WHERE id = ?", (err, r["id"]))
+            db.commit()
+        finally:
+            db.close()
         if err:
             applog("tracker", "warn", f"outcome check #{r['id']} ({r['symbol']} {r['horizon']}): {err}")
     return len(rows)

@@ -26,6 +26,8 @@ def test_process_due_checks_marks_done_and_error():
 
 
 def test_poller_thread_start_stop():
-    from tasks.outcome_poller import start_poller, stop_poller
-    start_poller(interval=0.05)
-    stop_poller()  # 应在 join 超时内干净退出
+    import tasks.outcome_poller as p
+    p.start_poller(interval=0.05)
+    assert p._thread is not None and p._thread.is_alive()
+    p.stop_poller()
+    assert not p._thread.is_alive()

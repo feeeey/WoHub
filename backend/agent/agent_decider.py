@@ -45,7 +45,8 @@ def _build_agent(cfg, model):
     def get_market_snapshot(ctx: RunContext[Deps], symbols: list[str]) -> dict:
         """获取给定 symbol 列表（clean 格式，如 BTCUSDT）的实时行情快照：价格/24h 涨跌/成交额/资金费率。"""
         out = T.market_snapshot(symbols)
-        ctx.deps.trace.append({"tool": "market_snapshot", "args": symbols})
+        ctx.deps.trace.append({"tool": "market_snapshot", "args": symbols,
+                               "result": json.dumps(out, ensure_ascii=False)[:2000]})
         return out
 
     @agent.tool
@@ -112,8 +113,8 @@ def run_agent_on_context(run_id, context, cfg, model_override=None) -> dict:
             result = agent.run_sync(prompt, deps=deps,
                                     usage_limits=UsageLimits(request_limit=cfg.max_tool_calls))
             usage = result.usage
-            in_tok = getattr(usage, "input_tokens", 0) or 0
-            out_tok = getattr(usage, "output_tokens", 0) or 0
+            in_tok = getattr(usage, "input_tokens", None) or getattr(usage, "request_tokens", 0) or 0
+            out_tok = getattr(usage, "output_tokens", None) or getattr(usage, "response_tokens", 0) or 0
             known = {(c["symbol"], c["timeframe"]): c for c in fresh}
             db = get_db(settings.db_path)
             try:

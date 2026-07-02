@@ -9,6 +9,13 @@ from database import get_db
 router = APIRouter(prefix="/agent")
 
 
+def _safe_json(s):
+    try:
+        return json.loads(s) if s else None
+    except json.JSONDecodeError:
+        return {"_parse_error": True}
+
+
 class AgentConfigBody(BaseModel):
     provider: Literal["openai", "anthropic"]
     base_url: str = ""
@@ -72,8 +79,8 @@ def run_detail(run_id: int):
     finally:
         db.close()
     out = dict(run)
-    out["trace"] = json.loads(run["trace_json"]) if run["trace_json"] else None
-    out["context"] = json.loads(run["context_json"]) if run["context_json"] else None
+    out["trace"] = _safe_json(run["trace_json"])
+    out["context"] = _safe_json(run["context_json"])
     out.pop("trace_json")
     out.pop("context_json")
     out["decisions"] = [dict(d) for d in ds]
@@ -105,8 +112,8 @@ def rate_decision(decision_id: int, body: RateBody):
         cur = db.execute("UPDATE agent_decisions SET human_rating = ? WHERE id = ?",
                          (body.rating, decision_id))
         db.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(404, "decision not found")
     finally:
         db.close()
-    if cur.rowcount == 0:
-        raise HTTPException(404, "decision not found")
     return {"ok": True}

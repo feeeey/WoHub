@@ -30,12 +30,13 @@ def _throttle():
 
 @dataclass
 class ToolBudget:
+    # 非线程安全：设计为 run_sync 单线程使用
     deep_dive_limit: int = 5
     used: int = 0
 
 
 def market_snapshot(symbols: list[str]) -> dict:
-    """15s TTL 缓存的 ticker/funding 快照，键为 clean symbol。"""
+    """15s TTL 缓存的 ticker/funding 快照，键为 clean symbol。（仅查 Binance 行情）"""
     tickers, _ = fetch_all_tickers()
     funding, _ = fetch_all_funding_rates()
     tmap = {(t["symbol"], t["exchange"]): t for t in tickers}
@@ -73,13 +74,13 @@ def kline_summary(symbol: str, interval: str, budget: ToolBudget, n: int = 120) 
     piv_short = find_pivot(candles, "short", last.close)
     patterns = [{"name_zh": p.name_zh, "direction": p.direction, "category": p.category}
                 for p in detect_patterns(candles)[-5:]]
-    vols = [c.volume for c in closed[-30:]]
+    vols = [c.volume for c in closed[-31:-1]]   # 30 根历史棒，剔除当前棒（避免自包含压缩 z 值）
     vol_sigma = pstdev(vols) if len(vols) > 1 else 0.0
     recent = closed[-n:] if len(closed) >= n else closed
     return {
         "symbol": symbol, "interval": interval,
         "last_close": last.close,
-        "atr": a, "atr_pct": round(a / last.close * 100, 3) if a else None,
+        "atr": a, "atr_pct": round(a / last.close * 100, 3) if a is not None else None,
         "pivot_below": piv_long.to_dict() if piv_long else None,
         "pivot_above": piv_short.to_dict() if piv_short else None,
         "last_closed_classification": classify(last).to_dict(),
@@ -107,7 +108,7 @@ def signal_history(symbol: str, indicator: str, limit: int = 30) -> dict:
             (symbol, indicator, indicator, limit)).fetchall()
     finally:
         db.close()
-    out = {"symbol": symbol, "indicator": indicator, "count": len(rows)}
+    out = {"symbol": symbol, "indicator": indicator, "signals_total": len(rows)}
     for h in ("1h", "4h", "24h"):
         vals = [r[f"change_{h}"] for r in rows if r[f"change_{h}"] is not None]
         out[f"tracked_{h}"] = len(vals)

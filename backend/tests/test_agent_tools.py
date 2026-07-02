@@ -57,4 +57,4 @@ def test_signal_history_win_rates(reset_db):
     db.commit()
     db.close()
     h = signal_history("BTCUSDT", "底背离")
-    assert h["count"] == 3 and abs(h["up_rate_4h"] - 2 / 3) < 1e-4
+    assert h["signals_total"] == 3 and abs(h["up_rate_4h"] - 2 / 3) < 1e-4

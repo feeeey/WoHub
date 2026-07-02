@@ -3,10 +3,6 @@ Signal outcome tracker.
 After a signal is recorded, schedules delayed price lookups to track
 what happened after the signal fired (1h, 4h, 24h later).
 """
-import json
-import time
-import threading
-from datetime import datetime, timezone
 from database import get_db
 from config import settings
 from sources.exchanges import fetch_all_tickers, fetch_all_funding_rates
@@ -46,26 +42,28 @@ def record_snapshot(signal_id, symbol, exchange):
         print(f"[tracker] Snapshot failed for signal {signal_id}: {e}")
 
 
+HORIZONS = [("1h", "+1 hour"), ("4h", "+4 hours"), ("24h", "+1 day")]
+
+
 def schedule_outcome_tracking(signal_id, symbol, exchange):
-    """Schedule delayed price lookups at 1h, 4h, 24h after signal."""
-    delays = [
-        (3600, "1h"),      # 1 hour
-        (14400, "4h"),     # 4 hours
-        (86400, "24h"),    # 24 hours
-    ]
-
-    for delay_seconds, label in delays:
-        t = threading.Timer(
-            delay_seconds,
-            _check_outcome,
-            args=[signal_id, symbol, exchange, label],
+    """Persist due-checks; the outcome poller thread executes them when due.
+    Survives process restarts (unlike the former in-memory Timers)."""
+    db = get_db(settings.db_path)
+    for horizon, offset in HORIZONS:
+        db.execute(
+            "INSERT INTO outcome_checks (signal_id, horizon, due_at) VALUES (?, ?, datetime('now', ?))",
+            (signal_id, horizon, offset),
         )
-        t.daemon = True
-        t.start()
+    db.commit()
+    db.close()
 
 
-def _check_outcome(signal_id, symbol, exchange, period):
-    """Called by timer to record price at 1h/4h/24h after signal."""
+def run_outcome_check(signal_id, symbol, exchange, period) -> "str | None":
+    """Check price outcome for a signal at the given horizon period.
+
+    Returns None on success, or an error string describing what went wrong.
+    Called by the outcome poller thread (Task 3) when a check becomes due.
+    """
     try:
         tickers, _ = fetch_all_tickers()
         current_price = 0.0
@@ -75,42 +73,41 @@ def _check_outcome(signal_id, symbol, exchange, period):
                 break
 
         if current_price == 0:
-            return
+            return f"price miss: no ticker for {symbol}@{exchange}"
 
-        # Get original snapshot price
         db = get_db(settings.db_path)
-        snap = db.execute(
-            "SELECT price FROM snapshots WHERE signal_id = ?", (signal_id,)
-        ).fetchone()
+        try:
+            snap = db.execute(
+                "SELECT price FROM snapshots WHERE signal_id = ?", (signal_id,)
+            ).fetchone()
 
-        if not snap or not snap["price"]:
+            if not snap or not snap["price"]:
+                return "snapshot missing or price=0"
+
+            original_price = snap["price"]
+            change_pct = ((current_price - original_price) / original_price) * 100
+
+            # Check if outcome row exists
+            outcome = db.execute(
+                "SELECT id FROM outcomes WHERE signal_id = ?", (signal_id,)
+            ).fetchone()
+
+            if outcome:
+                db.execute(
+                    f"UPDATE outcomes SET price_{period} = ?, change_{period} = ?, tracked_at = datetime('now') WHERE signal_id = ?",
+                    (current_price, round(change_pct, 4), signal_id),
+                )
+            else:
+                db.execute(
+                    f"INSERT INTO outcomes (signal_id, price_{period}, change_{period}) VALUES (?, ?, ?)",
+                    (signal_id, current_price, round(change_pct, 4)),
+                )
+
+            db.commit()
+            print(f"[tracker] Outcome {period} for signal {signal_id}: {symbol} {change_pct:+.2f}%")
+            return None
+        finally:
             db.close()
-            return
-
-        original_price = snap["price"]
-        change_pct = ((current_price - original_price) / original_price) * 100
-
-        # Check if outcome row exists
-        outcome = db.execute(
-            "SELECT id FROM outcomes WHERE signal_id = ?", (signal_id,)
-        ).fetchone()
-
-        if outcome:
-            # Update existing row
-            db.execute(
-                f"UPDATE outcomes SET price_{period} = ?, change_{period} = ?, tracked_at = datetime('now') WHERE signal_id = ?",
-                (current_price, round(change_pct, 4), signal_id),
-            )
-        else:
-            # Create new row
-            db.execute(
-                f"INSERT INTO outcomes (signal_id, price_{period}, change_{period}) VALUES (?, ?, ?)",
-                (signal_id, current_price, round(change_pct, 4)),
-            )
-
-        db.commit()
-        db.close()
-        print(f"[tracker] Outcome {period} for signal {signal_id}: {symbol} {change_pct:+.2f}%")
 
     except Exception as e:
-        print(f"[tracker] Outcome check failed: {e}")
+        return str(e)

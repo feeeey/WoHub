@@ -9,7 +9,7 @@ _tmpdir = tempfile.mkdtemp()
 os.environ.setdefault("DB_PATH", os.path.join(_tmpdir, "test.db"))
 
 from database import init_db
-from tasks.tracker import record_snapshot, _check_outcome
+from tasks.tracker import record_snapshot, run_outcome_check
 
 
 MOCK_TICKERS = [
@@ -75,7 +75,8 @@ def test_check_outcome(mock_fund, mock_tick):
          "priceChangePercent": 0, "volume24h": 0},
     ]
     with patch("tasks.tracker.fetch_all_tickers", return_value=(mock_current, [])):
-        _check_outcome(1, "BTCUSDT", "Binance", "1h")
+        err = run_outcome_check(1, "BTCUSDT", "Binance", "1h")
+    assert err is None
 
     from config import settings
     conn = sqlite3.connect(settings.db_path)

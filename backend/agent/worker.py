@@ -85,3 +85,5 @@ def stop_worker():
     _stop.set()
     if _thread:
         _thread.join(timeout=10)
+        if _thread.is_alive():
+            applog("agent", "warn", "worker thread did not stop within 10s; will be reaped at exit")

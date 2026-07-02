@@ -230,7 +230,8 @@ def schedule_outcome_tracking(signal_id, symbol, exchange):
 - [ ] **Step 4: 运行确认通过**
 
 Run: `cd backend && python -m pytest tests/test_tracker_persistent.py tests/test_tracker.py -v`
-Expected: PASS（若 `tests/test_tracker.py` 断言旧 Timer 行为则同步修改该测试）
+Expected: PASS
+⚠️ 既有 `tests/test_tracker.py` 在模块顶部 `from tasks.tracker import ... _check_outcome`——改名后会在**收集阶段**就 ImportError（不是断言失败）；把该 import 与相关用例同步改为 `run_outcome_check`。
 
 - [ ] **Step 5: Commit** `feat(tracker): persistent outcome_checks replace in-memory timers`
 
@@ -404,13 +405,15 @@ Expected: FAIL（签名不符）
 - [ ] **Step 3: 重写 _record_signals 与两处调用点**
 
 ```python
+# 模块顶部（import 区）——从函数内移出，使测试能 patch executor.record_snapshot：
+from tasks.tracker import record_snapshot, schedule_outcome_tracking
+
+
 def _record_signals(task_id, entries):
     """entries: list of (raw_symbol, label, resolution) — exact rows to insert.
     Returns {(clean_symbol, resolution): [signal_id, ...]} for decision linkage."""
     id_map = {}
     try:
-        from tasks.tracker import record_snapshot, schedule_outcome_tracking
-
         db = get_db(settings.db_path)
         pending = []
         for sym, label, res in entries:
@@ -436,8 +439,6 @@ def _record_signals(task_id, entries):
         print(f"[executor] Failed to record signals: {e}")
     return id_map
 ```
-
-顶部需要 `from tasks.tracker import record_snapshot, schedule_outcome_tracking` 保持函数内 import（测试 patch `executor.record_snapshot` 需要模块级引用——将 import 移到模块顶部：`from tasks.tracker import record_snapshot, schedule_outcome_tracking`，函数内直接用）。
 
 调用点改法：
 - `_exec_watchlist_signal`（executor.py:150）：从 `signals_by_res` 生成精确三元组：
@@ -664,18 +665,32 @@ from agent.decider import Decision
 from agent.store import record_rule_run
 
 
+def _seed_signals(n=2):
+    """FK 约束开启（get_db 设 PRAGMA foreign_keys=ON），signal_id 必须真实存在。"""
+    db = get_db(os.environ["DB_PATH"])
+    ids = []
+    for _ in range(n):
+        cur = db.execute("INSERT INTO signals (task_id, symbol, exchange, indicator, timeframe) "
+                         "VALUES (NULL, 'AUSDT', 'Binance', '底背离', '1h')")
+        ids.append(cur.lastrowid)
+    db.commit()
+    db.close()
+    return ids
+
+
 def test_record_rule_run_writes_run_and_decisions():
+    sid1, sid2 = _seed_signals(2)
     decisions = [Decision(symbol="BINANCE:AUSDT.P", timeframe="1h", direction="long",
                           confidence=None, reasons="规则：2 个筛选器命中（阈值 2）", labels=["底背离", "超卖"])]
-    id_map = {("AUSDT", "1h"): [11, 12]}
+    id_map = {("AUSDT", "1h"): [sid1, sid2]}
     run_id = record_rule_run(task_id=None, decisions=decisions, signal_id_map=id_map)
     db = get_db(os.environ["DB_PATH"])
     run = db.execute("SELECT decider, status FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
     d = db.execute("SELECT * FROM agent_decisions WHERE run_id = ?", (run_id,)).fetchone()
     db.close()
     assert (run["decider"], run["status"]) == ("rule", "done")
-    assert (d["symbol"], d["timeframe"], d["direction"], d["signal_id"]) == ("AUSDT", "1h", "long", 11)
-    assert json.loads(d["signal_ids_json"]) == [11, 12]
+    assert (d["symbol"], d["timeframe"], d["direction"], d["signal_id"]) == ("AUSDT", "1h", "long", sid1)
+    assert json.loads(d["signal_ids_json"]) == [sid1, sid2]
 
 
 def test_record_rule_run_empty_is_noop():
@@ -946,9 +961,12 @@ def put_config(body: AgentConfigBody):
     return _public(load_config())
 ```
 
-`api/__init__.py`：`from api.agent import router as agent_router` + `protected.include_router(agent_router)`。
+`api/__init__.py`：`from api.agent import router as agent_router` + `protected.include_router(agent_router)`——
+**必须插在 `api_router.include_router(protected)`（第 29 行）之前**：FastAPI 在 include 时拷贝路由，追加在其后会静默不生效。
 
-- [ ] **Step 4: 运行确认通过** — `cd backend && python -m pytest tests/test_agent_config.py tests/test_agent_schema.py -v` → PASS
+⚠️ 本任务使 SCHEMA 表数从 12 变 13：`tests/test_database.py` 的表数断言需 +1（Task 1 已 +3）。
+
+- [ ] **Step 4: 运行确认通过** — `cd backend && python -m pytest tests/test_agent_config.py tests/test_agent_schema.py tests/test_database.py -v` → PASS
 
 - [ ] **Step 5: Commit** `feat(agent): agent_config storage (Fernet key) + /api/agent/config`
 
@@ -984,9 +1002,9 @@ def test_kline_summary_shape_and_budget():
     budget = ToolBudget(deep_dive_limit=1)
     with patch("agent.tools.fetch_klines", return_value=_candles()):
         s = kline_summary("BTCUSDT", "1h", budget)
+        s2 = kline_summary("ETHUSDT", "1h", budget)   # 预算耗尽（留在 patch 块内防真实网络调用）
     assert s["symbol"] == "BTCUSDT" and "atr" in s and "recent_patterns" in s
     assert "candles" not in s                     # 绝不返回原始蜡烛数组
-    s2 = kline_summary("ETHUSDT", "1h", budget)   # 预算耗尽
     assert "error" in s2 and "budget" in s2["error"]
 
 
@@ -1127,14 +1145,15 @@ def kline_summary(symbol: str, interval: str, budget: ToolBudget, n: int = 120) 
 
 def signal_history(symbol: str, indicator: str, limit: int = 30) -> dict:
     """同 symbol×indicator 历史信号的 1h/4h/24h 上涨占比（方向盲的原始收益，
-    LLM 须结合信号语义解读；indicator 为纯 label——Phase 0 已统一编码）。"""
+    LLM 须结合信号语义解读）。indicator 为纯 label（Phase 0 统一编码）；
+    LIKE 子句兼容迁移前的 'label(res)' 双编码旧数据（spec Phase 0.4）。"""
     db = get_db(settings.db_path)
     rows = db.execute(
         """SELECT o.change_1h, o.change_4h, o.change_24h
            FROM signals s LEFT JOIN outcomes o ON o.signal_id = s.id
-           WHERE s.symbol = ? AND s.indicator = ?
+           WHERE s.symbol = ? AND (s.indicator = ? OR s.indicator LIKE ? || '(%')
            ORDER BY s.triggered_at DESC LIMIT ?""",
-        (symbol, indicator, limit)).fetchall()
+        (symbol, indicator, indicator, limit)).fetchall()
     db.close()
     out = {"symbol": symbol, "indicator": indicator, "count": len(rows)}
     for h in ("1h", "4h", "24h"):
@@ -1396,23 +1415,37 @@ def _cfg(**kw):
     return AgentConfig(**base)
 
 
-CONTEXT = {
-    "task_id": 1, "task_type": "watchlist_signal",
-    "results": [{"label": "底背离", "resolution": "1h", "symbols": ["BINANCE:BTCUSDT.P"]}],
-    "candidates": [{"symbol": "BTCUSDT", "timeframe": "1h", "labels": ["底背离"],
-                    "signal_ids": [1], "snapshot": {"priceChangePercent": 1.0}}],
-    "cross": {}, "bias_map": {"底背离": "long"},
-}
+def _seed_signal():
+    """FK 开启：candidates 里的 signal_ids 必须指向真实 signals 行。"""
+    db = get_db(os.environ["DB_PATH"])
+    cur = db.execute("INSERT INTO signals (task_id, symbol, exchange, indicator, timeframe) "
+                     "VALUES (NULL, 'BTCUSDT', 'Binance', '底背离', '1h')")
+    db.commit()
+    sid = cur.lastrowid
+    db.close()
+    return sid
+
+
+def _context(sid):
+    return {
+        "task_id": None, "task_type": "watchlist_signal",
+        "results": [{"label": "底背离", "resolution": "1h", "symbols": ["BINANCE:BTCUSDT.P"]}],
+        "candidates": [{"symbol": "BTCUSDT", "timeframe": "1h", "labels": ["底背离"],
+                        "signal_ids": [sid], "snapshot": {"priceChangePercent": 1.0}}],
+        "cross": {}, "bias_map": {"底背离": "long"},
+    }
 
 
 def test_run_agent_decision_persists(reset_db):
+    # call_tools=[] 避免 TestModel 默认调用全部工具触发真实网络请求
     from pydantic_ai.models.test import TestModel
     from agent.agent_decider import run_agent_on_context
     from agent.queue import enqueue_run, claim_next
-    rid = enqueue_run(None, CONTEXT)
+    ctx = _context(_seed_signal())
+    rid = enqueue_run(None, ctx)
     row = claim_next()
     result = run_agent_on_context(rid, json.loads(row["context_json"]), _cfg(),
-                                  model_override=TestModel())
+                                  model_override=TestModel(call_tools=[]))
     assert result["decisions"] >= 0      # TestModel 生成合法但任意的结构化输出
     db = get_db(os.environ["DB_PATH"])
     run = db.execute("SELECT status, prompt_version FROM agent_runs WHERE id=?", (rid,)).fetchone()
@@ -1438,23 +1471,24 @@ def test_valid_verdict_links_signal_ids(reset_db):
                  "confidence": 0.9, "reasons": "批外符号应被丢弃", "factors": None},
             ]})])
 
-    rid = enqueue_run(None, CONTEXT)
+    sid = _seed_signal()
+    ctx = _context(sid)
+    rid = enqueue_run(None, ctx)
     claim_next()
-    out = run_agent_on_context(rid, CONTEXT, _cfg(), model_override=FunctionModel(make_output))
+    out = run_agent_on_context(rid, ctx, _cfg(), model_override=FunctionModel(make_output))
     assert out["decisions"] == 1
     db = get_db(os.environ["DB_PATH"])
     ds = db.execute("SELECT symbol, direction, signal_ids_json FROM agent_decisions WHERE run_id=?",
                     (rid,)).fetchall()
     db.close()
     assert len(ds) == 1 and ds[0]["symbol"] == "BTCUSDT"
-    assert json.loads(ds[0]["signal_ids_json"]) == [1]
+    assert json.loads(ds[0]["signal_ids_json"]) == [sid]
 
 
 def test_cooldown_reuses_decision(reset_db):
     from pydantic_ai.models.test import TestModel
     from agent.agent_decider import run_agent_on_context
     from agent.queue import enqueue_run, claim_next
-    import agent.agent_decider as ad
     # 先手工插入一条冷却窗口内的 agent 裁决
     db = get_db(os.environ["DB_PATH"])
     cur = db.execute("INSERT INTO agent_runs (decider, status) VALUES ('agent', 'done')")
@@ -1462,9 +1496,10 @@ def test_cooldown_reuses_decision(reset_db):
                "VALUES (?, 'BTCUSDT', '1h', 'long', 0.7, 'prior')", (cur.lastrowid,))
     db.commit()
     db.close()
-    rid = enqueue_run(None, CONTEXT)
+    ctx = _context(_seed_signal())
+    rid = enqueue_run(None, ctx)
     claim_next()
-    out = run_agent_on_context(rid, CONTEXT, _cfg(), model_override=TestModel())
+    out = run_agent_on_context(rid, ctx, _cfg(), model_override=TestModel(call_tools=[]))
     assert out["reused"] == 1 and out["decisions"] == 0     # 全部命中冷却，不再调 LLM
     db = get_db(os.environ["DB_PATH"])
     trace = json.loads(db.execute("SELECT trace_json FROM agent_runs WHERE id=?", (rid,)).fetchone()["trace_json"])
@@ -1791,7 +1826,9 @@ from agent.decider import SignalBatch, Decision
 
 
 def _fixture():
-    batch = SignalBatch(task_id=7, task_type="watchlist_signal",
+    # task_id 用 None：FK 开启时非空 task_id 必须存在于 tasks 表，
+    # 而 _enqueue_agent_run 的 try/except 会吞掉 IntegrityError，导致断言神秘失败
+    batch = SignalBatch(task_id=None, task_type="watchlist_signal",
                         config={"resolutions": ["1h"]},
                         results=[{"label": "底背离", "resolution": "1h",
                                   "symbols": ["BINANCE:BTCUSDT.P"], "count": 1}],
@@ -1818,7 +1855,7 @@ def test_enqueue_respects_enabled_and_action(reset_db):
 
     with patch("agent.tools.market_snapshot", return_value=SNAP):
         # agent 未启用：不入队
-        _enqueue_agent_run(7, batch, decisions, id_map, actions=["agent_decide"])
+        _enqueue_agent_run(None, batch, decisions, id_map, actions=["agent_decide"])
         assert _count() == 0
 
         save_config({"provider": "openai", "model": "m", "api_key": "k", "enabled": True,
@@ -1826,10 +1863,10 @@ def test_enqueue_respects_enabled_and_action(reset_db):
                      "deep_dive_limit": 5, "cooldown_minutes": 240, "push_verdict": False,
                      "credential_id": None})
         # action 不含 agent_decide：不入队
-        _enqueue_agent_run(7, batch, decisions, id_map, actions=["text_summary"])
+        _enqueue_agent_run(None, batch, decisions, id_map, actions=["text_summary"])
         assert _count() == 0
         # 启用 + action 命中：入队且 context 完整
-        _enqueue_agent_run(7, batch, decisions, id_map, actions=["agent_decide"])
+        _enqueue_agent_run(None, batch, decisions, id_map, actions=["agent_decide"])
         assert _count() == 1
 
     db = get_db(os.environ["DB_PATH"])
@@ -2103,12 +2140,14 @@ Expected: 构建成功，无 ESLint/编译错误
 
 ```javascript
 function setDirection(dir) {
-  if (dir === 'long' || dir === 'short') form.direction = dir
+  // TradeForm 内部状态字段是 side（'BUY'/'SELL'）；long/short 只出现在 emit 的 payload 里
+  if (dir === 'long') form.side = 'BUY'
+  else if (dir === 'short') form.side = 'SELL'
 }
 // defineExpose({ applyPlan, setDirection })  —— 按现有 expose 对象合并
 ```
 
-（`form.direction` 的实际字段名以 TradeForm.vue 现状为准——compute-plan emit 的 payload 里是 `direction`。）
+（`form.side` 的实际字段名/结构以 TradeForm.vue 现状为准。）
 
 - [ ] **Step 2: Trade.vue** onMounted 末尾追加：
 
@@ -2134,7 +2173,7 @@ if (route.query.direction && tradeFormRef.value) {
 - Modify: `frontend/src/views/Settings.vue`
 
 - [ ] **Step 1: 新增"Agent 配置"卡片**（仿交易凭据卡片的结构与样式）：
-  - 字段：启用开关、provider 下拉（openai/anthropic）、base_url（provider=openai 时显示）、model、api_key（type=password，placeholder 依 `has_api_key` 显示"已保存（留空不修改）"）、max_tokens、max_tool_calls、deep_dive_limit、cooldown_minutes、credential_id（下拉，选项来自 `api.getTradingCredentials()` + "不使用"）、push_verdict 开关。
+  - 字段：启用开关、provider 下拉（openai/anthropic）、base_url（provider=openai 时显示）、model、api_key（type=password，placeholder 依 `has_api_key` 显示"已保存（留空不修改）"）、max_tokens、max_tool_calls、deep_dive_limit、cooldown_minutes、credential_id（下拉，选项来自 `api.listTradingCredentials()` + "不使用"）、push_verdict 开关。
   - 保存调 `api.updateAgentConfig`（api_key 为空串时发送 null）。
   - 若返回的 `insecure_defaults` 非空，显示警告条："SECRET_KEY/APP_PASSWORD 为默认值——密钥加密形同虚设，且轮换 SECRET_KEY 会作废已存密钥"。
 - [ ] **Step 2: 构建验证** — `cd frontend && npm run build` → 成功

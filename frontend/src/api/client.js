@@ -296,6 +296,7 @@ export const api = {
     return request(`/agent/decisions/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating }) })
   },
 
+  // 后端 /agent/stats 由统计任务提供（Phase 4）；在此前调用会 404
   async getAgentStats() {
     return request('/agent/stats')
   },

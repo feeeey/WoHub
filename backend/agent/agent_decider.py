@@ -110,8 +110,10 @@ def run_agent_on_context(run_id, context, cfg, model_override=None) -> dict:
             deps = Deps(budget=T.ToolBudget(deep_dive_limit=cfg.deep_dive_limit),
                         credential_id=cfg.credential_id, trace=trace["steps"])
             prompt = render_batch({**context, "candidates": fresh})
+            # tool_calls_limit 精确对应配置语义；request_limit 兜底防循环
             result = agent.run_sync(prompt, deps=deps,
-                                    usage_limits=UsageLimits(request_limit=cfg.max_tool_calls))
+                                    usage_limits=UsageLimits(request_limit=cfg.max_tool_calls + 1,
+                                                             tool_calls_limit=cfg.max_tool_calls))
             usage = result.usage
             in_tok = getattr(usage, "input_tokens", None) or getattr(usage, "request_tokens", 0) or 0
             out_tok = getattr(usage, "output_tokens", None) or getattr(usage, "response_tokens", 0) or 0

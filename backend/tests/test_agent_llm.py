@@ -31,3 +31,21 @@ def test_missing_key_raises():
 def test_prompt_version_exists():
     from agent.prompts import PROMPT_VERSION, SYSTEM_PROMPT
     assert PROMPT_VERSION and "纯技术分析" in SYSTEM_PROMPT
+
+
+def test_render_batch_happy_path():
+    from agent.prompts import render_batch
+    out = render_batch({
+        "task_id": 1, "task_type": "watchlist_signal",
+        "results": [{"label": "底背离", "resolution": "1h", "symbols": []}],
+        "candidates": [{"symbol": "BTCUSDT", "timeframe": "1h", "labels": ["底背离"],
+                        "snapshot": {"priceChangePercent": 2.5, "fundingRate": 0.0001}}],
+        "cross": {}, "bias_map": {"底背离": "long"},
+    })
+    assert "BTCUSDT" in out and "空集" in out and "long" in out
+
+
+def test_render_batch_tolerates_missing_keys():
+    from agent.prompts import render_batch
+    out = render_batch({})
+    assert "任务" in out   # 不抛 KeyError

@@ -1,3 +1,4 @@
+import pytest
 from unittest.mock import patch
 from agent import tools as T
 
@@ -53,3 +54,28 @@ def test_account_overview_error_returned():
     with patch("trading.service.get_account", side_effect=RuntimeError("auth")):
         out = T.account_overview(credential_id=3)
     assert "error" in out
+
+
+def test_progress_cb_exception_propagates():
+    """取消机制依赖回调异常向外传播——绝不能被工具吞掉。"""
+    class Stop(Exception):
+        pass
+
+    def cb(done, total, note):
+        raise Stop()
+
+    with patch("sources.pine_screener.run_screener", return_value=[]):
+        with pytest.raises(Stop):
+            T.run_screener_scan(["oscillator/oversold_zone"], ["1h"], 0, progress_cb=cb)
+
+
+def test_scan_mixed_batch_isolation_and_truncation():
+    def fake_run(folder, name, res, wl):
+        if res == "1h":
+            raise RuntimeError("boom")
+        return [f"S{i}" for i in range(150)]
+
+    with patch("sources.pine_screener.run_screener", side_effect=fake_run):
+        out = T.run_screener_scan(["oscillator/oversold_zone"], ["1h", "4h"], 0)
+    assert len(out["errors"]) == 1 and len(out["results"]) == 1
+    assert len(out["results"][0]["symbols"]) == 100

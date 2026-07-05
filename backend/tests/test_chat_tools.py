@@ -47,3 +47,36 @@ def test_market_overview_sorts_and_trims():
         out = T.market_overview(top_n=5)
     assert len(out["gainers"]) == 5 and out["gainers"][0]["priceChangePercent"] == 29.0
     assert len(out["losers"]) == 5 and out["losers"][0]["priceChangePercent"] == 0.0
+
+
+def test_get_klines_element_order_distinct_values():
+    c = Candle(open_time=7, close_time=8, open=1.0, high=4.0, low=0.5,
+               close=2.0, volume=9.0, closed=True)
+    with patch.object(T, "fetch_klines", return_value=[c]):
+        out = T.get_klines("X", "1h", limit=50)
+    assert out["candles"][0] == [7, 1.0, 4.0, 0.5, 2.0, 9.0]
+
+
+def test_get_klines_lower_clamp_and_bad_limit():
+    with patch.object(T, "fetch_klines", return_value=[_mk(0, 100)]) as fk:
+        T.get_klines("X", "1h", limit=1)
+        assert fk.call_args.kwargs["limit"] == 10
+    assert "error" in T.get_klines("X", "1h", limit="abc")
+
+
+def test_get_indicators_insufficient_closed_candles():
+    candles = [_mk(i, 100) for i in range(10)]
+    with patch.object(T, "fetch_klines", return_value=candles):
+        out = T.get_indicators("X", "1h")
+    assert "error" in out and "10" in out["error"]
+
+
+def test_market_overview_clamps_and_error_dict():
+    tickers = [{"symbol": f"S{i}", "exchange": "Binance", "lastPrice": 1,
+                "priceChangePercent": float(i), "volume24h": 1000} for i in range(30)]
+    with patch.object(T, "fetch_all_tickers", return_value=(tickers, None)), \
+         patch.object(T, "fetch_all_funding_rates", return_value=([], None)):
+        assert len(T.market_overview(top_n=999)["gainers"]) == 20
+        assert len(T.market_overview(top_n=1)["gainers"]) == 3
+    with patch.object(T, "fetch_all_tickers", side_effect=RuntimeError("net down")):
+        assert "error" in T.market_overview()

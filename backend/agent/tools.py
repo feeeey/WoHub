@@ -134,7 +134,10 @@ def position_plan_preview(symbol: str, interval: str, direction: str, credential
 def get_klines(symbol: str, interval: str, limit: int = 100) -> dict:
     """紧凑 K 线数组 [[open_time, open, high, low, close, volume], ...]，
     时间升序；limit 钳制到 300（token 保护）。"""
-    limit = max(10, min(int(limit), 300))
+    try:
+        limit = max(10, min(int(limit), 300))
+    except (TypeError, ValueError):
+        return {"error": f"limit 必须是数字，收到 {limit!r}"}
     _throttle()
     try:
         candles = fetch_klines(symbol, interval, limit=limit)
@@ -171,23 +174,26 @@ def list_watchlists() -> dict:
     from sources.pine_screener import fetch_watchlists
     try:
         mapping = fetch_watchlists()
+        return {"watchlists": [{"name": k, "id": v} for k, v in mapping.items()]}
     except Exception as e:
         return {"error": f"watchlist 获取失败（可能 cookie 过期）: {e}"}
-    return {"watchlists": [{"name": k, "id": v} for k, v in mapping.items()]}
 
 
 def market_overview(top_n: int = 10) -> dict:
     """涨跌榜 + 资金费率极值（Binance USDT-M）。"""
-    top_n = max(3, min(int(top_n), 20))
-    tickers, _ = fetch_all_tickers()
-    funding, _ = fetch_all_funding_rates()
-    bn = [t for t in tickers if t["exchange"] == "Binance"]
-    by_chg = sorted(bn, key=lambda t: t["priceChangePercent"], reverse=True)
-    fr = sorted((f for f in funding if f["exchange"] == "Binance"),
-                key=lambda f: f["fundingRate"])
-    slim = lambda t: {"symbol": t["symbol"], "lastPrice": t["lastPrice"],
-                      "priceChangePercent": t["priceChangePercent"],
-                      "volume24h": t["volume24h"]}
-    return {"gainers": [slim(t) for t in by_chg[:top_n]],
-            "losers": [slim(t) for t in reversed(by_chg[-top_n:])],
-            "funding_extremes": {"lowest": fr[:5], "highest": fr[-5:]} if fr else {}}
+    try:
+        top_n = max(3, min(int(top_n), 20))
+        tickers, _ = fetch_all_tickers()
+        funding, _ = fetch_all_funding_rates()
+        bn = [t for t in tickers if t["exchange"] == "Binance"]
+        by_chg = sorted(bn, key=lambda t: t["priceChangePercent"], reverse=True)
+        fr = sorted((f for f in funding if f["exchange"] == "Binance"),
+                    key=lambda f: f["fundingRate"])
+        slim = lambda t: {"symbol": t["symbol"], "lastPrice": t["lastPrice"],
+                          "priceChangePercent": t["priceChangePercent"],
+                          "volume24h": t["volume24h"]}
+        return {"gainers": [slim(t) for t in by_chg[:top_n]],
+                "losers": [slim(t) for t in reversed(by_chg[-top_n:])],
+                "funding_extremes": {"lowest": fr[:5], "highest": fr[-5:]} if fr else {}}
+    except Exception as e:
+        return {"error": f"行情总览获取失败: {e}"}

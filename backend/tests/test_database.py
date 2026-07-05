@@ -112,4 +112,5 @@ def test_init_db_is_idempotent():
         # screenshots) + 2 trading tables (trading_credentials, trading_orders)
         # + 3 agent tables (outcome_checks, agent_runs, agent_decisions)
         # + 1 agent config table (agent_config)
-        assert len(tables) == 13
+        # + 5 chat tables (chat_sessions, chat_messages, chat_turns, chat_events, screener_semantics)
+        assert len(tables) == 18

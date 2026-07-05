@@ -171,13 +171,78 @@ CREATE TABLE IF NOT EXISTS agent_config (
 );
 
 CREATE INDEX IF NOT EXISTS idx_outcomes_signal ON outcomes(signal_id);
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '新会话',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES chat_sessions(id),
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL DEFAULT '',
+    images_json TEXT,
+    trace_json TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    model TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, id);
+
+CREATE TABLE IF NOT EXISTS chat_turns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES chat_sessions(id),
+    user_message_id INTEGER REFERENCES chat_messages(id),
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued', 'running', 'done', 'failed', 'cancelled')),
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_chat_turns_status ON chat_turns(status);
+CREATE INDEX IF NOT EXISTS idx_chat_turns_session ON chat_turns(session_id, id);
+
+CREATE TABLE IF NOT EXISTS chat_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    turn_id INTEGER NOT NULL REFERENCES chat_turns(id),
+    seq INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chat_events_turn ON chat_events(turn_id, seq);
+
+CREATE TABLE IF NOT EXISTS screener_semantics (
+    key TEXT PRIMARY KEY,
+    meaning TEXT NOT NULL DEFAULT '',
+    bias TEXT NOT NULL DEFAULT '',
+    usage TEXT NOT NULL DEFAULT '',
+    caveats TEXT NOT NULL DEFAULT '',
+    combos TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent column additions for tables that already exist in deployed DBs.
+    (SCHEMA 是 append-only：改已存在的 CREATE TABLE 体是静默 no-op。)"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_config)")}
+    if "vision_model" not in cols:
+        conn.execute("ALTER TABLE agent_config ADD COLUMN vision_model TEXT NOT NULL DEFAULT ''")
 
 
 def init_db(db_path: str) -> None:
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
+    _migrate(conn)
+    conn.commit()
     conn.close()
 
 

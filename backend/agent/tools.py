@@ -197,3 +197,57 @@ def market_overview(top_n: int = 10) -> dict:
                 "funding_extremes": {"lowest": fr[:5], "highest": fr[-5:]} if fr else {}}
     except Exception as e:
         return {"error": f"行情总览获取失败: {e}"}
+
+
+MAX_SCAN_COMBOS = 12    # TradingView 1req/2s：12 combo ≈ 24s，对话可接受上限
+
+
+def run_screener_scan(screener_keys: list[str], timeframes: list[str],
+                      watchlist_id: int, progress_cb=None) -> dict:
+    """跑筛选器×周期组合。每个 combo 完成回调 progress_cb(done, total, note)。
+    单 combo 失败不中断整个扫描（记入 errors）。受 TradingView 全局 2s 限流。"""
+    from sources import pine_screener as ps
+    valid = {f"{s['folder_type']}/{s['screener_name']}": s["label"] for s in ps.list_screeners()}
+    # 隐藏的合并背离筛选器也允许（向后兼容 key）
+    valid.setdefault("oscillator/divergence", ps.SCREENER_NAMES["oscillator/divergence"])
+    bad = [k for k in screener_keys if k not in valid]
+    if bad:
+        return {"error": f"未知筛选器 key: {bad}；可用: {sorted(valid)}"}
+    bad_tf = [t for t in timeframes if t not in ps.VALID_RESOLUTIONS]
+    if bad_tf:
+        return {"error": f"非法周期: {bad_tf}；可用: {sorted(ps.VALID_RESOLUTIONS)}"}
+    combos = [(k, tf) for k in screener_keys for tf in timeframes]
+    if not combos:
+        return {"error": "screener_keys 与 timeframes 都不能为空"}
+    if len(combos) > MAX_SCAN_COMBOS:
+        return {"error": f"组合数 {len(combos)} 超上限 {MAX_SCAN_COMBOS}"
+                         "（限流 1 次/2 秒，请缩小范围分批扫）"}
+    results, errors = [], []
+    for i, (key, tf) in enumerate(combos, 1):
+        folder, name = key.split("/", 1)
+        label = valid[key]
+        try:
+            symbols = ps.run_screener(folder, name, tf, watchlist_id)
+            results.append({"key": key, "label": label, "resolution": tf,
+                            "symbols": symbols[:100], "count": len(symbols)})
+            note = f"{label}@{tf} 命中 {len(symbols)}"
+        except Exception as e:
+            errors.append({"key": key, "resolution": tf, "error": str(e)[:300]})
+            note = f"{label}@{tf} 失败"
+        if progress_cb:
+            progress_cb(i, len(combos), note)
+    return {"results": results, "cross": ps.build_cross_analysis(results),
+            "errors": errors,
+            "hint": "空 symbols 可能是无信号，也可能是数据源失败——参考 errors 判断"}
+
+
+def account_overview(credential_id: int) -> dict:
+    """余额/持仓/挂单只读总览。本函数绝不 import 任何下单函数。"""
+    _throttle()
+    try:
+        from trading.service import get_account, list_open_orders   # 均为只读
+        acct = get_account(credential_id)
+        acct["open_orders"] = list_open_orders(credential_id)
+        return acct
+    except Exception as e:
+        return {"error": f"账户查询失败: {e}"}

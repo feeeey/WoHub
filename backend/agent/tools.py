@@ -127,3 +127,67 @@ def position_plan_preview(symbol: str, interval: str, direction: str, credential
                                    interval=interval, direction=direction, order_type="MARKET")
     except Exception as e:
         return {"error": f"plan failed: {e}"}
+
+
+# ---- chat agent tools（Phase 2 追加；全只读）----
+
+def get_klines(symbol: str, interval: str, limit: int = 100) -> dict:
+    """紧凑 K 线数组 [[open_time, open, high, low, close, volume], ...]，
+    时间升序；limit 钳制到 300（token 保护）。"""
+    limit = max(10, min(int(limit), 300))
+    _throttle()
+    try:
+        candles = fetch_klines(symbol, interval, limit=limit)
+    except Exception as e:
+        return {"error": f"K线获取失败: {e}"}
+    if not candles:
+        return {"error": "K线为空"}
+    return {
+        "symbol": symbol.upper(), "interval": interval,
+        "candles": [[c.open_time, c.open, c.high, c.low, c.close, c.volume]
+                    for c in candles],
+        "last_closed": candles[-1].closed,
+    }
+
+
+def get_indicators(symbol: str, interval: str) -> dict:
+    """核心六件套指标当前值（MA/EMA/MACD/RSI/BOLL/ATR/量比），基于已收盘K线。"""
+    from klines.indicators import compute_indicators
+    _throttle()
+    try:
+        candles = fetch_klines(symbol, interval, limit=120)
+    except Exception as e:
+        return {"error": f"K线获取失败: {e}"}
+    closed = [c for c in candles if c.closed]
+    if len(closed) < 30:
+        return {"error": f"已收盘K线不足（{len(closed)} 根），无法计算指标"}
+    return {"symbol": symbol.upper(), "interval": interval,
+            "last_close": closed[-1].close,
+            "indicators": compute_indicators(candles)}
+
+
+def list_watchlists() -> dict:
+    """TradingView 关注列表（name -> id），run_screener_scan 的前置。"""
+    from sources.pine_screener import fetch_watchlists
+    try:
+        mapping = fetch_watchlists()
+    except Exception as e:
+        return {"error": f"watchlist 获取失败（可能 cookie 过期）: {e}"}
+    return {"watchlists": [{"name": k, "id": v} for k, v in mapping.items()]}
+
+
+def market_overview(top_n: int = 10) -> dict:
+    """涨跌榜 + 资金费率极值（Binance USDT-M）。"""
+    top_n = max(3, min(int(top_n), 20))
+    tickers, _ = fetch_all_tickers()
+    funding, _ = fetch_all_funding_rates()
+    bn = [t for t in tickers if t["exchange"] == "Binance"]
+    by_chg = sorted(bn, key=lambda t: t["priceChangePercent"], reverse=True)
+    fr = sorted((f for f in funding if f["exchange"] == "Binance"),
+                key=lambda f: f["fundingRate"])
+    slim = lambda t: {"symbol": t["symbol"], "lastPrice": t["lastPrice"],
+                      "priceChangePercent": t["priceChangePercent"],
+                      "volume24h": t["volume24h"]}
+    return {"gainers": [slim(t) for t in by_chg[:top_n]],
+            "losers": [slim(t) for t in reversed(by_chg[-top_n:])],
+            "funding_extremes": {"lowest": fr[:5], "highest": fr[-5:]} if fr else {}}

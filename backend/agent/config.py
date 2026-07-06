@@ -7,7 +7,7 @@ from database import get_db
 from config import settings
 from trading.credentials import encrypt_secret, decrypt_secret
 
-FIELDS = ("provider", "base_url", "model", "max_tokens", "max_tool_calls",
+FIELDS = ("provider", "base_url", "model", "vision_model", "max_tokens", "max_tool_calls",
           "deep_dive_limit", "cooldown_minutes", "credential_id", "push_verdict", "enabled")
 
 
@@ -17,6 +17,7 @@ class AgentConfig:
     base_url: str
     api_key: str | None
     model: str
+    vision_model: str
     max_tokens: int
     max_tool_calls: int
     deep_dive_limit: int
@@ -40,7 +41,8 @@ def load_config() -> AgentConfig:
         db.close()
     key = decrypt_secret(row["api_key_enc"]) if row["api_key_enc"] else None
     return AgentConfig(provider=row["provider"], base_url=row["base_url"], api_key=key,
-                       model=row["model"], max_tokens=row["max_tokens"],
+                       model=row["model"], vision_model=row["vision_model"],
+                       max_tokens=row["max_tokens"],
                        max_tool_calls=row["max_tool_calls"], deep_dive_limit=row["deep_dive_limit"],
                        cooldown_minutes=row["cooldown_minutes"], credential_id=row["credential_id"],
                        push_verdict=bool(row["push_verdict"]), enabled=bool(row["enabled"]))

@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, BinaryContent, RunContext
 from pydantic_ai.usage import UsageLimits
 from pydantic_ai.messages import PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta
 
@@ -15,6 +15,7 @@ from agent import tools as T
 from agent.llm import build_model
 from agent.chat import store, events
 from agent.chat.prompts import build_system_prompt, render_history, CHAT_PROMPT_VERSION
+from agent.chat.vision import describe_image, load_image
 
 HISTORY_LIMIT = 20          # 发给模型的历史消息条数上限（规格 §4）
 FLUSH_INTERVAL = 0.1        # text_delta 聚合窗口（秒）
@@ -178,7 +179,7 @@ def _build_agent(cfg, model) -> Agent:
     return agent
 
 
-def _build_prompt(session_id: int, user_message_id: int):
+def _build_prompt(session_id: int, user_message_id: int, cfg, deps: ChatDeps):
     msgs = store.list_messages(session_id)
     current = next(m for m in msgs if m["id"] == user_message_id)
     history = [m for m in msgs if m["id"] < user_message_id][-HISTORY_LIMIT:]
@@ -187,11 +188,34 @@ def _build_prompt(session_id: int, user_message_id: int):
         text += "【对话历史（最近 %d 条）】\n%s\n\n【当前消息】\n" % (
             len(history), render_history(history))
     text += current.get("content") or ""
-    if current.get("images"):
-        # 视觉管道在 Task 14 接入；此前如实告知模型
-        text += "\n（用户附带了 %d 张图片，当前部署未启用视觉功能，无法查看图片内容）" \
-                % len(current["images"])
-    return text, current
+    images = current.get("images") or []
+    if not images:
+        return text, current
+    if cfg.vision_model:
+        # 视觉中继：每张图先由视觉模型转述，作为一步 trace 记录
+        for i, img in enumerate(images, 1):
+            deps.check_cancel()
+            deps.emit("tool_start", {"tool": "vision_relay",
+                                     "args": {"filename": img["filename"]}})
+            try:
+                data, mt = load_image(img["kind"], img["filename"])
+                desc = describe_image(cfg, data, mt)
+                ok = True
+            except Exception as e:
+                desc = f"图片读取/分析失败: {e}"
+                ok = False
+            deps.trace.append({"tool": "vision_relay", "args": img,
+                               "result": desc[:RESULT_TRUNC]})
+            deps.emit("tool_end", {"tool": "vision_relay", "ok": ok,
+                                   "summary": desc[:400], "elapsed_ms": 0})
+            text += f"\n\n【图片{i}的视觉分析（由视觉模型转述）】\n{desc}"
+        return text, current
+    # 未配置视觉模型：BinaryContent 直传主模型（不支持图像的主模型将由失败路径呈现）
+    parts: list = [text]
+    for img in images:
+        data, mt = load_image(img["kind"], img["filename"])
+        parts.append(BinaryContent(data=data, media_type=mt))
+    return parts, current
 
 
 async def _drive(agent: Agent, prompt: str, deps: ChatDeps, cfg, buf: _DeltaBuffer):
@@ -266,7 +290,7 @@ def run_turn(turn_row, model_override=None) -> None:
             raise TurnCancelled()
         if not cfg.enabled or (not cfg.api_key and model_override is None):
             raise RuntimeError("Agent 未启用或未配置 API Key（请到系统设置页配置）")
-        prompt, current = _build_prompt(session_id, turn_row["user_message_id"])
+        prompt, current = _build_prompt(session_id, turn_row["user_message_id"], cfg, deps)
         model = model_override or build_model(cfg)
         agent = _build_agent(cfg, model)
         run = asyncio.run(_drive(agent, prompt, deps, cfg, buf))

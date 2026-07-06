@@ -6,7 +6,7 @@ from agent.config import AgentConfig
 
 def _cfg(**kw):
     base = dict(provider="openai", base_url="", api_key="k", model="test",
-                max_tokens=4096, max_tool_calls=15, deep_dive_limit=5,
+                vision_model="", max_tokens=4096, max_tool_calls=15, deep_dive_limit=5,
                 cooldown_minutes=240, credential_id=None, push_verdict=False, enabled=True)
     base.update(kw)
     return AgentConfig(**base)

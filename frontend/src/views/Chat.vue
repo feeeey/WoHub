@@ -69,7 +69,7 @@
         <div class="chat-input">
           <textarea v-model="draft" rows="2" :disabled="live.active"
                     placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"
-                    @keydown.enter.exact.prevent="send"></textarea>
+                    @keydown.enter.exact="onEnterKey"></textarea>
           <button v-if="live.active" class="btn danger" @click="stop">■ 停止</button>
           <button v-else class="btn primary" :disabled="!draft.trim()" @click="send">发送</button>
         </div>
@@ -92,6 +92,7 @@ const scrollEl = ref(null)
 const live = reactive({ active: false, turnId: null, text: '', cards: [], images: [] })
 
 let es = null
+let reconnectTimer = null
 let lastEventId = 0
 let reconnectDelay = 1000
 
@@ -120,6 +121,13 @@ async function scrollBottom() {
   if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight
 }
 
+function onEnterKey(e) {
+  // 输入法组词中：Enter 只确认候选词，不发送（isComposing 标准；229 兼容旧 IME 事件）
+  if (e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  send()
+}
+
 function resetLive() {
   live.active = false
   live.turnId = null
@@ -130,6 +138,7 @@ function resetLive() {
 
 // ---- SSE ----
 function closeStream() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   if (es) { es.close(); es = null }
 }
 
@@ -171,7 +180,7 @@ function openStream() {
   on('cancelled', async () => { await finalizeTurn() })
   es.onerror = () => {
     closeStream()
-    setTimeout(openStream, reconnectDelay)
+    reconnectTimer = setTimeout(openStream, reconnectDelay)
     reconnectDelay = Math.min(reconnectDelay * 2, 10000)
   }
 }
@@ -219,7 +228,7 @@ async function renameSession(s) {
 async function removeSession(s) {
   if (!confirm(`删除会话「${s.title}」及全部消息？`)) return
   await api.deleteChatSession(s.id)
-  if (activeId.value === s.id) { activeId.value = null; messages.value = []; closeStream() }
+  if (activeId.value === s.id) { activeId.value = null; messages.value = []; resetLive(); closeStream() }
   await loadSessions()
 }
 
@@ -308,7 +317,7 @@ onBeforeUnmount(closeStream)
 .chat-input textarea { flex: 1; resize: none; border-radius: var(--radius-md); padding: 10px;
   background: var(--bg-primary); border: 1px solid var(--border-strong);
   color: inherit; font: inherit; }
-.btn { padding: 8px 18px; border: none; cursor: pointer; }
+.btn { padding: 8px 18px; border: none; cursor: pointer; border-radius: var(--radius-sm, 8px); }
 .btn.primary { background: var(--accent); color: #fff; }
 .btn.danger { background: var(--danger); color: #fff; }
 .btn.tiny { padding: 2px 8px; font-size: 12px; margin-left: 8px; }

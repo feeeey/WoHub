@@ -250,6 +250,19 @@ def run_screener_scan(screener_keys: list[str], timeframes: list[str],
             "hint": "空 symbols 可能是无信号，也可能是数据源失败——参考 errors 判断"}
 
 
+def capture_chart(symbol: str, interval: str) -> dict:
+    """ChartShot 截取 TradingView 实时图表（含用户配置的指标模板）。
+    返回文件名列表；文件已落在 settings.screenshots_dir。"""
+    from screenshots.client import chartshot_client
+    res = chartshot_client.screenshot(symbol, [interval])
+    if not res.get("ok"):
+        return {"error": f"截图失败: {res.get('error', 'unknown')}（可能 ChartShot 未运行或 cookie 过期）"}
+    files = res.get("files") or []
+    if not files:
+        return {"error": "截图服务未返回文件"}
+    return {"files": files}
+
+
 def account_overview(credential_id: int) -> dict:
     """余额/持仓/挂单只读总览。本函数绝不 import 任何下单函数。"""
     _throttle()

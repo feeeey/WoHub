@@ -160,6 +160,35 @@ def _build_agent(cfg, model) -> Agent:
                      lambda: T.run_screener_scan(screener_keys, timeframes,
                                                  watchlist_id, progress_cb=cb))
 
+    if cfg.vision_model:
+        @agent.tool
+        def capture_chart(ctx: RunContext[ChatDeps], symbol: str, interval: str) -> dict:
+            """截取 TradingView 实时图表并做视觉分析（长任务，占深评配额）。
+            interval 用 1h/4h/1d 等格式。"""
+            d = ctx.deps
+
+            def run():
+                if d.budget.used >= d.budget.deep_dive_limit:
+                    return {"error": f"深评配额已用完（每轮 {d.budget.deep_dive_limit} 次），"
+                                     "请用已有证据作答"}
+                d.budget.used += 1
+                out = T.capture_chart(symbol, interval)
+                if out.get("error"):
+                    return out
+                analysis = []
+                for fn in out["files"]:
+                    d.emit("image", {"kind": "screenshot", "filename": fn,
+                                     "caption": f"{symbol} {interval}"})
+                    try:
+                        data, mt = load_image("screenshot", fn)
+                        analysis.append(describe_image(cfg, data, mt))
+                    except Exception as e:
+                        analysis.append(f"视觉分析失败: {e}")
+                return {"files": out["files"], "analysis": analysis}
+
+            return _tool(ctx, "capture_chart",
+                         {"symbol": symbol, "interval": interval}, run)
+
     if cfg.credential_id:
         @agent.tool
         def get_position_plan(ctx: RunContext[ChatDeps], symbol: str, interval: str,

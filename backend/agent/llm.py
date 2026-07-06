@@ -5,17 +5,15 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
 
-def build_model(cfg):
-    """构建 LLM 模型实例（Anthropic/OpenAI）。
-
-    注意：cfg.max_tokens/max_tool_calls 不在此应用——由 Task 12 的 Agent 构造
-    （UsageLimits/model settings）负责。
-    """
+def build_model(cfg, model_name: str | None = None):
+    """构建 LLM 模型实例（Anthropic/OpenAI）。model_name 覆盖 cfg.model
+    （视觉模型槽位用）。"""
     if not cfg.api_key:
         raise ValueError("agent LLM api_key 未配置")
+    name = model_name or cfg.model
     if cfg.provider == "anthropic":
-        return AnthropicModel(cfg.model, provider=AnthropicProvider(api_key=cfg.api_key))
+        return AnthropicModel(name, provider=AnthropicProvider(api_key=cfg.api_key))
     kwargs = {"api_key": cfg.api_key}
     if cfg.base_url:
         kwargs["base_url"] = cfg.base_url
-    return OpenAIChatModel(cfg.model, provider=OpenAIProvider(**kwargs))
+    return OpenAIChatModel(name, provider=OpenAIProvider(**kwargs))

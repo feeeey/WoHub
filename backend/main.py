@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
     start_all_enabled()
     from tasks.outcome_poller import start_poller, stop_poller
     start_poller()
-    from agent.worker import start_worker, stop_worker
+    from agent.chat.worker import start_worker, stop_worker
     start_worker()
     yield
     stop_worker()

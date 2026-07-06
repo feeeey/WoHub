@@ -280,27 +280,6 @@ export const api = {
     return request('/agent/config', { method: 'PUT', body: JSON.stringify(data) })
   },
 
-  async listAgentRuns(limit = 50) {
-    return request(`/agent/runs?limit=${limit}`)
-  },
-
-  async getAgentRun(id) {
-    return request(`/agent/runs/${id}`)
-  },
-
-  async rerunAgentRun(id) {
-    return request(`/agent/runs/${id}/rerun`, { method: 'POST' })
-  },
-
-  async rateAgentDecision(id, rating) {
-    return request(`/agent/decisions/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating }) })
-  },
-
-  // 后端 /agent/stats 由统计任务提供（Phase 4）；在此前调用会 404
-  async getAgentStats() {
-    return request('/agent/stats')
-  },
-
   // ---- chat ----
 
   async listChatSessions() {

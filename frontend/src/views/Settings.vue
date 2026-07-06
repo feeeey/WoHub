@@ -239,8 +239,17 @@
 
       <div class="form-row">
         <div class="form-group">
-          <label>模型</label>
-          <input v-model="agentForm.model" placeholder="例：gpt-4o / claude-opus-4-5" />
+          <label>模型 <button type="button" class="btn-inline" @click="loadModels">刷新列表</button></label>
+          <input v-model="agentForm.model" list="agent-model-list"
+                 placeholder="例：deepseek/deepseek-v4-pro（可手输或从列表选）" />
+          <datalist id="agent-model-list">
+            <option v-for="m in modelList" :key="m" :value="m" />
+          </datalist>
+        </div>
+        <div class="form-group">
+          <label>视觉模型（可选，识图/截图分析用）</label>
+          <input v-model="agentForm.vision_model" list="agent-model-list"
+                 placeholder="留空 = 图片直传主模型（主模型须多模态）" />
         </div>
         <div class="form-group">
           <label>API Key</label>
@@ -274,15 +283,9 @@
         </div>
       </div>
 
-      <div class="form-row">
-        <div class="form-group">
-          <label>deep_dive_limit（0 – 20）</label>
-          <input v-model.number="agentForm.deep_dive_limit" type="number" min="0" max="20" />
-        </div>
-        <div class="form-group">
-          <label>冷却时间 cooldown_minutes（分钟）</label>
-          <input v-model.number="agentForm.cooldown_minutes" type="number" min="0" />
-        </div>
+      <div class="form-group">
+        <label>deep_dive_limit（0 – 20）</label>
+        <input v-model.number="agentForm.deep_dive_limit" type="number" min="0" max="20" />
       </div>
 
       <div class="form-row">
@@ -307,9 +310,43 @@
 
       <div class="btn-row">
         <button class="btn btn-primary btn-sm" @click="saveAgentConfig">保存</button>
+        <button type="button" class="btn btn-sm" :disabled="testing" @click="testLlm">
+          {{ testing ? '测试中…' : '测试连接' }}
+        </button>
+        <span v-if="testResult" class="test-result">
+          主模型 {{ testResult.main.ok ? '✅' : '❌ ' + testResult.main.error }}
+          <template v-if="testResult.vision">
+            ｜视觉 {{ testResult.vision.ok ? '✅ 支持图像' : '❌ ' + testResult.vision.error }}
+          </template>
+        </span>
       </div>
       <div v-if="agentMsg" class="action-msg" :class="agentOk ? 'msg-ok' : 'msg-fail'">
         {{ agentMsg }}
+      </div>
+    </div>
+
+    <!-- Screener Semantics -->
+    <div class="card section">
+      <div class="section-header">
+        <h3 class="section-title">筛选器语义档案</h3>
+      </div>
+      <p class="section-desc">
+        注入 agent system prompt，让它理解每个筛选器的含义（初稿可直接修改）。
+      </p>
+      <div v-for="s in semantics" :key="s.key" class="sem-card">
+        <div class="sem-head" @click="s._open = !s._open">
+          <strong>{{ s.label }}</strong> <code>{{ s.key }}</code>
+          <span class="sem-bias">{{ s.bias }}</span>
+        </div>
+        <div v-if="s._open" class="sem-body">
+          <label>含义<textarea v-model="s.meaning" rows="2" /></label>
+          <label>方向倾向<input v-model="s.bias" /></label>
+          <label>用法<textarea v-model="s.usage" rows="2" /></label>
+          <label>局限<textarea v-model="s.caveats" rows="2" /></label>
+          <label>建议叠加<textarea v-model="s.combos" rows="2" /></label>
+          <button class="btn btn-primary btn-sm" @click="saveSemantics(s)">保存</button>
+          <span v-if="s._msg" class="action-msg msg-ok">{{ s._msg }}</span>
+        </div>
       </div>
     </div>
 
@@ -557,10 +594,10 @@ const agentForm = ref({
   provider: 'openai',
   base_url: '',
   model: '',
+  vision_model: '',
   max_tokens: 4096,
   max_tool_calls: 15,
   deep_dive_limit: 5,
-  cooldown_minutes: 240,
   credential_id: null,
   push_verdict: false,
 })
@@ -570,6 +607,9 @@ const agentApiKeyClearedFlag = ref(false)
 const agentInsecureDefaults = ref([])
 const agentMsg = ref('')
 const agentOk = ref(false)
+const modelList = ref([])
+const testing = ref(false)
+const testResult = ref(null)
 
 async function loadAgentConfig() {
   try {
@@ -581,10 +621,10 @@ async function loadAgentConfig() {
       provider: r.provider || 'openai',
       base_url: r.base_url || '',
       model: r.model || '',
+      vision_model: r.vision_model || '',
       max_tokens: r.max_tokens ?? 4096,
       max_tool_calls: r.max_tool_calls ?? 15,
       deep_dive_limit: r.deep_dive_limit ?? 5,
-      cooldown_minutes: r.cooldown_minutes ?? 240,
       credential_id: r.credential_id ?? null,
       push_verdict: r.push_verdict ?? false,
     }
@@ -620,6 +660,41 @@ async function saveAgentConfig() {
   }
 }
 
+function agentOverrides() {
+  const o = { provider: agentForm.value.provider, base_url: agentForm.value.base_url,
+              model: agentForm.value.model, vision_model: agentForm.value.vision_model }
+  if (agentApiKeyInput.value.trim()) o.api_key = agentApiKeyInput.value.trim()
+  return o
+}
+
+async function loadModels() {
+  try { modelList.value = (await api.fetchAgentModels(agentOverrides())).models }
+  catch (e) { alert('模型列表获取失败：' + e.message) }
+}
+
+async function testLlm() {
+  testing.value = true
+  testResult.value = null
+  try { testResult.value = await api.testAgentLlm(agentOverrides()) }
+  catch (e) { testResult.value = { main: { ok: false, error: e.message }, vision: null } }
+  finally { testing.value = false }
+}
+
+// ---- Screener semantics ----
+const semantics = ref([])
+
+async function loadSemantics() {
+  semantics.value = (await api.getScreenerSemantics()).map(s => ({ ...s, _open: false, _msg: '' }))
+}
+
+async function saveSemantics(s) {
+  await api.saveScreenerSemantics(s.key, {
+    meaning: s.meaning, bias: s.bias, usage: s.usage, caveats: s.caveats, combos: s.combos,
+  })
+  s._msg = '已保存'
+  setTimeout(() => { s._msg = '' }, 2000)
+}
+
 // Logs
 const logs = ref([])
 const logSource = ref('')
@@ -641,6 +716,7 @@ onMounted(() => {
   loadProxy()
   loadTradingCreds()
   loadAgentConfig()
+  loadSemantics()
   loadLogs()
 })
 </script>
@@ -965,4 +1041,14 @@ onMounted(() => {
   color: var(--warning, var(--danger));
   margin-top: 4px;
 }
+
+.btn-inline { font-size: 12px; padding: 1px 8px; margin-left: 8px; cursor: pointer; }
+.test-result { font-size: 12.5px; margin-left: 10px; }
+
+/* ---- Screener semantics ---- */
+.sem-card { border: 1px solid rgba(128,128,128,.2); border-radius: 8px; margin-bottom: 8px; }
+.sem-head { display: flex; gap: 10px; align-items: center; padding: 8px 12px; cursor: pointer; }
+.sem-bias { margin-left: auto; font-size: 12px; opacity: .7; }
+.sem-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.sem-body label { display: flex; flex-direction: column; font-size: 12.5px; gap: 2px; }
 </style>

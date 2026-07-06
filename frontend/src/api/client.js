@@ -355,4 +355,22 @@ export const api = {
   chatImageUrl(kind, filename) {
     return `${BASE}/chat/images/${kind}/${encodeURIComponent(filename)}`
   },
+
+  // ---- agent v2 (model list / connectivity test / screener semantics) ----
+
+  async fetchAgentModels(overrides = {}) {
+    return request('/agent/models', { method: 'POST', body: JSON.stringify(overrides) })
+  },
+
+  async testAgentLlm(overrides = {}) {
+    return request('/agent/test', { method: 'POST', body: JSON.stringify(overrides) })
+  },
+
+  async getScreenerSemantics() {
+    return request('/agent/semantics')
+  },
+
+  async saveScreenerSemantics(key, fields) {
+    return request(`/agent/semantics/${key}`, { method: 'PUT', body: JSON.stringify(fields) })
+  },
 }

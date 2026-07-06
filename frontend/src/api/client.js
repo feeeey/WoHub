@@ -300,4 +300,55 @@ export const api = {
   async getAgentStats() {
     return request('/agent/stats')
   },
+
+  // ---- chat ----
+
+  async listChatSessions() {
+    return request('/chat/sessions')
+  },
+
+  async createChatSession(title = null) {
+    return request('/chat/sessions', { method: 'POST', body: JSON.stringify({ title }) })
+  },
+
+  async renameChatSession(id, title) {
+    return request(`/chat/sessions/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) })
+  },
+
+  async deleteChatSession(id) {
+    return request(`/chat/sessions/${id}`, { method: 'DELETE' })
+  },
+
+  async getChatMessages(id) {
+    return request(`/chat/sessions/${id}/messages`)
+  },
+
+  async sendChatMessage(id, content, files = []) {
+    const form = new FormData()
+    form.append('content', content)
+    for (const f of files) form.append('files', f)
+    const res = await fetch(`${BASE}/chat/sessions/${id}/messages`, {
+      method: 'POST',
+      body: form,
+    })
+    if (res.status === 401) { window.location.href = '/login'; throw new Error('Unauthorized') }
+    if (!res.ok) {
+      let detail = `${res.status}`
+      try { detail = (await res.json()).detail || detail } catch {}
+      throw new Error(detail)
+    }
+    return res.json()
+  },
+
+  async cancelChatTurn(turnId) {
+    return request(`/chat/turns/${turnId}/cancel`, { method: 'POST' })
+  },
+
+  chatStreamUrl(sessionId, after = 0) {
+    return `${BASE}/chat/sessions/${sessionId}/stream?after=${after}`
+  },
+
+  chatImageUrl(kind, filename) {
+    return `${BASE}/chat/images/${kind}/${encodeURIComponent(filename)}`
+  },
 }

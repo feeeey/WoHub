@@ -91,3 +91,23 @@ async def test_sse_stream_replays_backlog(client):
                 lines.append(line)
         assert any(l == f"id: {e1}" for l in lines)
         assert any(l.startswith("event: text_delta") for l in lines)
+
+
+@pytest.mark.asyncio
+async def test_multifile_partial_failure_writes_nothing(client):
+    from config import settings
+
+    def _count():
+        return len(os.listdir(settings.chat_uploads_dir)) \
+            if os.path.isdir(settings.chat_uploads_dir) else 0
+
+    before = _count()
+    big = b"x" * (5 * 1024 * 1024 + 1)
+    async with client as c:
+        sid = (await c.post("/api/chat/sessions", json={})).json()["id"]
+        r = await c.post(f"/api/chat/sessions/{sid}/messages",
+                         data={"content": "两张图"},
+                         files=[("files", ("a.png", PNG_1PX, "image/png")),
+                                ("files", ("b.png", big, "image/png"))])
+        assert r.status_code == 413
+    assert _count() == before          # 第一张合法图片也不能落盘（两阶段保证）

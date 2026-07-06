@@ -58,13 +58,17 @@ def get_messages(sid: int):
             "last_event_id": events.last_event_id()}
 
 
-def _save_upload(f: UploadFile) -> dict:
+def _read_upload(f: UploadFile) -> tuple[bytes, str]:
     ext = ALLOWED_IMAGE_TYPES.get(f.content_type)
     if not ext:
         raise HTTPException(415, f"仅支持 PNG/JPEG 图片，收到 {f.content_type}")
     data = f.file.read(MAX_IMAGE_BYTES + 1)
     if len(data) > MAX_IMAGE_BYTES:
         raise HTTPException(413, "图片超过 5MB 上限")
+    return data, ext
+
+
+def _write_upload(data: bytes, ext: str) -> dict:
     os.makedirs(settings.chat_uploads_dir, exist_ok=True)
     filename = f"{uuid.uuid4().hex}{ext}"
     with open(os.path.join(settings.chat_uploads_dir, filename), "wb") as out:
@@ -77,17 +81,15 @@ def post_message(sid: int, content: str = Form(""),
                  files: list[UploadFile] = File(default=[])):
     if not any(s["id"] == sid for s in store.list_sessions()):
         raise HTTPException(404, "会话不存在")
-    # Validate upload types before the active-turn conflict check: a
-    # malformed request (unsupported file type) should surface as 415
-    # regardless of session state, not get masked behind a 409.
-    for f in files:
-        if f.content_type not in ALLOWED_IMAGE_TYPES:
-            raise HTTPException(415, f"仅支持 PNG/JPEG 图片，收到 {f.content_type}")
+    # Read and validate all uploads before any disk writes: if the batch has
+    # mixed valid/invalid files, all validation errors raise before anything
+    # touches disk (prevents orphaned uploads on partial failure).
+    blobs = [_read_upload(f) for f in files]
     if store.active_turn(sid):
         raise HTTPException(409, "上一轮还在进行中（可先停止）")
     if not content.strip() and not files:
         raise HTTPException(422, "消息不能为空")
-    images = [_save_upload(f) for f in files]
+    images = [_write_upload(data, ext) for data, ext in blobs]
     mid = store.add_message(sid, "user", content.strip(), images=images or None)
     tid = store.create_turn(sid, mid)
     return {"turn_id": tid, "message_id": mid}
@@ -133,7 +135,7 @@ async def stream(sid: int, after: int = 0, once: bool = False):
 def get_image(kind: str, filename: str):
     dirs = {"upload": settings.chat_uploads_dir,
             "screenshot": settings.screenshots_dir}
-    if kind not in dirs or not _FILENAME_RE.fullmatch(filename):
+    if kind not in dirs or filename in (".", "..") or not _FILENAME_RE.fullmatch(filename):
         raise HTTPException(400, "非法路径")
     path = os.path.join(dirs[kind], filename)
     if not os.path.isfile(path):

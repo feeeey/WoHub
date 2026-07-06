@@ -8,7 +8,7 @@ from typing import Optional
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
-from pydantic_ai.messages import PartDeltaEvent, TextPartDelta
+from pydantic_ai.messages import PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta
 
 from app_logger import log as applog
 from agent import tools as T
@@ -203,7 +203,10 @@ async def _drive(agent: Agent, prompt: str, deps: ChatDeps, cfg, buf: _DeltaBuff
             if Agent.is_model_request_node(node):
                 async with node.stream(run.ctx) as stream:
                     async for ev in stream:
-                        if isinstance(ev, PartDeltaEvent) and isinstance(ev.delta, TextPartDelta):
+                        if isinstance(ev, PartStartEvent) and isinstance(ev.part, TextPart):
+                            if ev.part.content:
+                                buf.add(ev.part.content)
+                        elif isinstance(ev, PartDeltaEvent) and isinstance(ev.delta, TextPartDelta):
                             buf.add(ev.delta.content_delta)
         return run
 

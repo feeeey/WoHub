@@ -127,19 +127,14 @@ def test_cancel_inside_tool_blocks_next_tool():
 def test_cancel_between_stream_chunks():
     """流式块之间的检查点：第二块 flush 后必须触发取消，且已出文本保留。
 
-    适配说明：实测发现 pydantic-ai 1.107.0 的 FunctionModel 对同一个
-    vendor_part_id 的第一次文本产出会走 PartStartEvent（新建 TextPart），
-    只有第二次及之后才是 PartDeltaEvent(TextPartDelta)；而 `_drive()` 只订阅
-    PartDeltaEvent，因此一次响应里"第一个文本块"天然不会进入 `buf`——这与
-    FLUSH_CHARS 阈值或时间窗口无关，纯粹是事件类型。为了让断言仍然覆盖
-    "超过 FLUSH_CHARS 触发 flush+检查" 与 "取消后终态 cancelled 且已发出文本
-    保留" 这两个契约点，这里先发一个不参与断言的极短占位块把 TextPart
-    "开起来"，再用两个真正的大块（各 500 字）走 delta 路径触发 flush。
+    第一个真实块（"开场白"）经 PartStartEvent 携带的 TextPart 进入 buf——
+    `_drive()` 现在同时订阅 PartStartEvent(TextPart) 与
+    PartDeltaEvent(TextPartDelta)，因此不再需要占位块把 TextPart "开起来"。
     """
     sid, mid, row = _prep("讲个长故事")
 
     async def stream_fn(messages, info: AgentInfo):
-        yield "…"                                   # 占位块：走 PartStartEvent，不进 buf，不参与断言
+        yield "开场白"                               # PartStartEvent，首块文本，必须进入 buf
         yield "甲" * 500                            # PartDeltaEvent，超过 FLUSH_CHARS，flush + 检查（未取消）
         store.request_cancel(row["id"])
         yield "乙" * 500                            # flush 后检查点触发 TurnCancelled
@@ -148,4 +143,19 @@ def test_cancel_between_stream_chunks():
     types = _types(row["id"])
     assert types[-1] == "cancelled"
     last = store.list_messages(sid)[-1]
+    assert "开场白" in last["content"]               # 首块文本已持久化
     assert "甲" in last["content"]                  # 部分文本已持久化
+
+
+def test_first_stream_chunk_not_lost():
+    """PartStartEvent 携带的首块文本必须进入缓冲——真实 provider 的每轮回复开头。"""
+    sid, mid, row = _prep("你好")
+
+    async def stream_fn(messages, info: AgentInfo):
+        yield "首块"
+        yield "，后续"
+
+    runtime.run_turn(row, model_override=FunctionModel(stream_function=stream_fn))
+    last = store.list_messages(sid)[-1]
+    assert last["content"] == "首块，后续"
+    assert last["error"] is None

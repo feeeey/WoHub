@@ -66,12 +66,24 @@
           </div>
         </div>
 
-        <div class="chat-input">
-          <textarea v-model="draft" rows="2" :disabled="live.active"
-                    placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"
-                    @keydown.enter.exact="onEnterKey"></textarea>
-          <button v-if="live.active" class="btn danger" @click="stop">■ 停止</button>
-          <button v-else class="btn primary" :disabled="!draft.trim()" @click="send">发送</button>
+        <div class="chat-input-wrap">
+          <div v-if="pendingFiles.length" class="pend-imgs">
+            <span v-for="(f, i) in pendingFiles" :key="i" class="pend-chip">
+              <img :src="f.preview" />
+              <button @click="pendingFiles.splice(i, 1)">✕</button>
+            </span>
+          </div>
+          <div class="chat-input">
+            <button class="btn ghost" title="添加图片" @click="fileInput.click()">🖼</button>
+            <input ref="fileInput" type="file" accept="image/png,image/jpeg" multiple
+                   style="display:none" @change="pickFiles" />
+            <textarea v-model="draft" rows="2" :disabled="live.active"
+                      placeholder="问点什么…（Enter 发送，Shift+Enter 换行，可粘贴图片）"
+                      @keydown.enter.exact="onEnterKey" @paste="onPaste"></textarea>
+            <button v-if="live.active" class="btn danger" @click="stop">■ 停止</button>
+            <button v-else class="btn primary"
+                    :disabled="!draft.trim() && !pendingFiles.length" @click="send">发送</button>
+          </div>
         </div>
       </template>
     </section>
@@ -89,6 +101,8 @@ const activeId = ref(null)
 const messages = ref([])
 const draft = ref('')
 const scrollEl = ref(null)
+const pendingFiles = ref([])
+const fileInput = ref(null)
 const live = reactive({ active: false, turnId: null, text: '', cards: [], images: [] })
 
 let es = null
@@ -119,6 +133,21 @@ function retryTargetOf(m) {
 async function scrollBottom() {
   await nextTick()
   if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight
+}
+
+function addFile(file) {
+  if (!['image/png', 'image/jpeg'].includes(file.type)) { alert('仅支持 PNG/JPEG'); return }
+  if (file.size > 5 * 1024 * 1024) { alert('图片超过 5MB'); return }
+  pendingFiles.value.push({ file, preview: URL.createObjectURL(file) })
+}
+function pickFiles(e) {
+  for (const f of e.target.files) addFile(f)
+  e.target.value = ''
+}
+function onPaste(e) {
+  for (const item of e.clipboardData.items) {
+    if (item.type.startsWith('image/')) { const f = item.getAsFile(); if (f) addFile(f) }
+  }
 }
 
 function onEnterKey(e) {
@@ -235,11 +264,14 @@ async function removeSession(s) {
 // ---- 发送/停止/重试 ----
 async function send() {
   const text = draft.value.trim()
-  if (!text || live.active) return
+  const files = pendingFiles.value.map(p => p.file)
+  if ((!text && !files.length) || live.active) return
   draft.value = ''
+  pendingFiles.value = []
   try {
-    const r = await api.sendChatMessage(activeId.value, text)
-    messages.value.push({ id: r.message_id, role: 'user', content: text, images: [] })
+    const r = await api.sendChatMessage(activeId.value, text, files)
+    const data = await api.getChatMessages(activeId.value)   // 拿服务端落库的 images 引用
+    messages.value = data.messages
     live.active = true
     live.turnId = r.turn_id
     scrollBottom()
@@ -322,4 +354,10 @@ onBeforeUnmount(closeStream)
 .btn.danger { background: var(--danger); color: #fff; }
 .btn.tiny { padding: 2px 8px; font-size: 12px; margin-left: 8px; }
 .btn:disabled { opacity: .4; cursor: default; }
+.pend-imgs { display: flex; gap: 8px; padding: 0 16px; }
+.pend-chip { position: relative; }
+.pend-chip img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; }
+.pend-chip button { position: absolute; top: -6px; right: -6px; border-radius: 50%;
+  border: none; width: 18px; height: 18px; font-size: 10px; cursor: pointer; }
+.btn.ghost { background: none; border: 1px solid rgba(128,128,128,.3); }
 </style>

@@ -70,7 +70,7 @@
           <div v-if="pendingFiles.length" class="pend-imgs">
             <span v-for="(f, i) in pendingFiles" :key="i" class="pend-chip">
               <img :src="f.preview" />
-              <button @click="pendingFiles.splice(i, 1)">✕</button>
+              <button @click="removeFile(i)">✕</button>
             </span>
           </div>
           <div class="chat-input">
@@ -148,6 +148,11 @@ function onPaste(e) {
   for (const item of e.clipboardData.items) {
     if (item.type.startsWith('image/')) { const f = item.getAsFile(); if (f) addFile(f) }
   }
+}
+
+function removeFile(i) {
+  URL.revokeObjectURL(pendingFiles.value[i].preview)
+  pendingFiles.value.splice(i, 1)
 }
 
 function onEnterKey(e) {
@@ -264,12 +269,14 @@ async function removeSession(s) {
 // ---- 发送/停止/重试 ----
 async function send() {
   const text = draft.value.trim()
-  const files = pendingFiles.value.map(p => p.file)
+  const pend = pendingFiles.value
+  const files = pend.map(p => p.file)
   if ((!text && !files.length) || live.active) return
   draft.value = ''
   pendingFiles.value = []
   try {
     const r = await api.sendChatMessage(activeId.value, text, files)
+    pend.forEach(p => URL.revokeObjectURL(p.preview))   // 预览用途已尽，回收
     const data = await api.getChatMessages(activeId.value)   // 拿服务端落库的 images 引用
     messages.value = data.messages
     live.active = true
@@ -278,6 +285,7 @@ async function send() {
   } catch (e) {
     alert('发送失败：' + e.message)
     draft.value = text
+    pendingFiles.value = pend                            // 附件与草稿一并恢复（预览未回收仍可用）
   }
 }
 
@@ -299,7 +307,10 @@ onMounted(async () => {
   await loadSessions()
   if (sessions.value.length) await selectSession(sessions.value[0].id)
 })
-onBeforeUnmount(closeStream)
+onBeforeUnmount(() => {
+  closeStream()
+  pendingFiles.value.forEach(p => URL.revokeObjectURL(p.preview))
+})
 </script>
 
 <style scoped>

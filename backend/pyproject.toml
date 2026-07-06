@@ -25,6 +25,9 @@ where = ["."]
 include = ["api*", "sources*", "channels*"]
 
 [tool.pytest.ini_options]
+# repo-local tmp root: the default %TEMP%/pytest-of-<user> dir can rot with
+# broken ACLs on Windows and is unfixable without admin rights
+addopts = "--basetemp=.pytest_tmp"
 markers = [
     "network: marks tests that make live network calls (deselect with '-m \"not network\"')",
 ]

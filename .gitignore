@@ -32,3 +32,8 @@ Thumbs.db
 /ChartShot/
 
 .claude/settings.local.json
+
+# Pytest
+.pytest_cache/
+backend/.pytest_tmp/
+.superpowers/

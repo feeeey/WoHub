@@ -53,4 +53,5 @@ def stop_worker():
         _thread.join(timeout=10)
         if _thread.is_alive():
             applog("chat", "warn", "chat worker did not stop within 10s")
-        _thread = None
+        else:
+            _thread = None

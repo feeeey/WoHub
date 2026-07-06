@@ -34,5 +34,7 @@ def test_worker_seed_semantics_on_start():
 
 def test_stop_worker_joins():
     worker.start_worker(interval=0.05)
+    t = worker._thread
     worker.stop_worker()
-    assert worker._thread is None or not worker._thread.is_alive()
+    assert t is not None and not t.is_alive()   # 线程真的停了
+    assert worker._thread is None               # 句柄已清空，可安全重启

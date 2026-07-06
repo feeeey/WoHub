@@ -101,7 +101,7 @@ def cancel_turn(tid: int):
 
 
 @router.get("/sessions/{sid}/stream")
-async def stream(sid: int, after: int = 0):
+async def stream(sid: int, after: int = 0, once: bool = False):
     async def gen():
         last = after
         last_beat = time.monotonic()
@@ -114,17 +114,14 @@ async def stream(sid: int, after: int = 0):
             if rows:
                 last_beat = time.monotonic()
                 continue
-            # Caught up. ASGI servers signal client disconnect via receive(),
-            # letting this generator exit early on a real deployment — but no
-            # transport can decouple "server done producing" from "client done
-            # reading" for a never-returning generator, so it must also end on
-            # its own: immediately once nothing is left in flight, or after one
-            # missed heartbeat if a turn is still (nominally) running.
-            if not store.active_turn(sid):
+            if once:
+                # 测试/调试逃生口：httpx ASGITransport 会缓冲整个 ASGI 响应，
+                # 无限流在该环境下永不返回——once 模式追平积压即收流。
+                # 生产 EventSource 不传 once；真实服务器在客户端断开时会取消本协程。
                 return
             if time.monotonic() - last_beat > 15:
                 yield ": ping\n\n"
-                return
+                last_beat = time.monotonic()
             await asyncio.sleep(0.15)
 
     return StreamingResponse(gen(), media_type="text/event-stream",

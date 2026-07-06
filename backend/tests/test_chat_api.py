@@ -85,11 +85,9 @@ async def test_sse_stream_replays_backlog(client):
                             data={"content": "hi"})).json()["turn_id"]
         e1 = events.append_event(tid, "text_delta", {"text": "a"})
         lines = []
-        async with c.stream("GET", f"/api/chat/sessions/{sid}/stream?after=0") as r:
+        async with c.stream("GET", f"/api/chat/sessions/{sid}/stream?after=0&once=1") as r:
             assert r.headers["content-type"].startswith("text/event-stream")
             async for line in r.aiter_lines():
                 lines.append(line)
-                if line.startswith("data:"):
-                    break
         assert any(l == f"id: {e1}" for l in lines)
         assert any(l.startswith("event: text_delta") for l in lines)

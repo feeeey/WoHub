@@ -95,6 +95,25 @@ def post_message(sid: int, content: str = Form(""),
     return {"turn_id": tid, "message_id": mid}
 
 
+@router.post("/messages/{mid}/retry")
+def retry_message(mid: int):
+    db_msgs = None
+    # 找到该 user 消息所属会话
+    for s in store.list_sessions():
+        for m in store.list_messages(s["id"]):
+            if m["id"] == mid and m["role"] == "user":
+                db_msgs = (s["id"], m)
+                break
+        if db_msgs:
+            break
+    if not db_msgs:
+        raise HTTPException(404, "消息不存在或不是用户消息")
+    sid, _ = db_msgs
+    if store.active_turn(sid):
+        raise HTTPException(409, "上一轮还在进行中")
+    return {"turn_id": store.create_turn(sid, mid)}
+
+
 @router.post("/turns/{tid}/cancel")
 def cancel_turn(tid: int):
     if not store.request_cancel(tid):

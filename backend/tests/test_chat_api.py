@@ -94,6 +94,21 @@ async def test_sse_stream_replays_backlog(client):
 
 
 @pytest.mark.asyncio
+async def test_retry_creates_new_turn_for_same_message(client):
+    async with client as c:
+        sid = (await c.post("/api/chat/sessions", json={})).json()["id"]
+        r = (await c.post(f"/api/chat/sessions/{sid}/messages",
+                          data={"content": "hi"})).json()
+        # 模拟上一轮失败
+        store.finish_turn(r["turn_id"], "failed")
+        r2 = (await c.post(f"/api/chat/messages/{r['message_id']}/retry")).json()
+        assert r2["turn_id"] != r["turn_id"]
+        # 有活动轮次时 409
+        r3 = await c.post(f"/api/chat/messages/{r['message_id']}/retry")
+        assert r3.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_multifile_partial_failure_writes_nothing(client):
     from config import settings
 

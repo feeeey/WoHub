@@ -107,7 +107,7 @@ const navItems = [
   },
   {
     path: '/agent',
-    label: 'Agent 复盘',
+    label: 'Agent 对话',
     icon: '<rect x="3" y="4" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="1.5" /><circle cx="15" cy="10" r="1.5" /><path d="M9 14h6" /><line x1="8" y1="1" x2="8" y2="4" /><line x1="16" y1="1" x2="16" y2="4" />',
   },
   {

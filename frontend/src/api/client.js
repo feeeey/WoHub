@@ -344,6 +344,10 @@ export const api = {
     return request(`/chat/turns/${turnId}/cancel`, { method: 'POST' })
   },
 
+  async retryChatMessage(messageId) {
+    return request(`/chat/messages/${messageId}/retry`, { method: 'POST' })
+  },
+
   chatStreamUrl(sessionId, after = 0) {
     return `${BASE}/chat/sessions/${sessionId}/stream?after=${after}`
   },

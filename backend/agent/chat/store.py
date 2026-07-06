@@ -189,14 +189,14 @@ def active_turn(session_id: int) -> dict | None:
         db.close()
 
 
-def recover_interrupted() -> list[int]:
+def recover_interrupted() -> list[dict]:
     """启动恢复：queued 保留续跑；被重启打断的 running 判 failed。"""
     db = _db()
     try:
         rows = db.execute(
             """UPDATE chat_turns SET status = 'failed', finished_at = datetime('now')
-               WHERE status = 'running' RETURNING id""").fetchall()
+               WHERE status = 'running' RETURNING id, session_id""").fetchall()
         db.commit()
-        return [r["id"] for r in rows]
+        return [{"id": r["id"], "session_id": r["session_id"]} for r in rows]
     finally:
         db.close()

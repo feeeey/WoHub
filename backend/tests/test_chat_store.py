@@ -44,5 +44,5 @@ def test_recover_interrupted_marks_running_failed():
     sid = store.create_session()
     tid = store.create_turn(sid, store.add_message(sid, "user", "x"))
     store.claim_next_turn()
-    assert store.recover_interrupted() == [tid]
+    assert store.recover_interrupted() == [{"id": tid, "session_id": sid}]
     assert store.active_turn(sid) is None      # failed 不算 active

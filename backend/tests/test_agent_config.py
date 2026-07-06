@@ -20,7 +20,7 @@ async def test_update_config_roundtrip_key_masked(client):
             "provider": "openai", "base_url": "https://api.example.com/v1",
             "model": "gpt-5", "vision_model": "gpt-4-vision", "api_key": "sk-secret", "enabled": True,
             "max_tool_calls": 10, "deep_dive_limit": 3,
-            "push_verdict": False, "credential_id": None, "max_tokens": 4096})
+            "credential_id": None, "max_tokens": 4096})
         assert r.status_code == 200
         r2 = await c.get("/api/agent/config")
     body = r2.json()
@@ -32,7 +32,7 @@ def test_load_config_decrypts_key():
     from agent.config import save_config, load_config
     save_config({"provider": "anthropic", "model": "claude-sonnet-4-6", "vision_model": "claude-vision",
                  "api_key": "k123", "base_url": "", "enabled": True, "max_tool_calls": 15,
-                 "deep_dive_limit": 5, "push_verdict": False, "credential_id": None, "max_tokens": 4096})
+                 "deep_dive_limit": 5, "credential_id": None, "max_tokens": 4096})
     cfg = load_config()
     assert cfg.api_key == "k123" and cfg.provider == "anthropic" and cfg.enabled and cfg.vision_model == "claude-vision"
 
@@ -41,7 +41,7 @@ def test_load_config_decrypts_key():
 async def test_put_without_key_preserves_stored_key(client):
     body = {"provider": "openai", "base_url": "", "model": "m", "vision_model": "",
             "enabled": False, "max_tool_calls": 15, "deep_dive_limit": 5,
-            "push_verdict": False, "credential_id": None, "max_tokens": 4096}
+            "credential_id": None, "max_tokens": 4096}
     async with client as c:
         await c.put("/api/agent/config", json={**body, "api_key": "sk-keep"})
         r = await c.put("/api/agent/config", json={**body, "api_key": None})
@@ -52,7 +52,7 @@ async def test_put_without_key_preserves_stored_key(client):
 async def test_put_empty_string_clears_key(client):
     body = {"provider": "openai", "base_url": "", "model": "m", "vision_model": "",
             "enabled": False, "max_tool_calls": 15, "deep_dive_limit": 5,
-            "push_verdict": False, "credential_id": None, "max_tokens": 4096}
+            "credential_id": None, "max_tokens": 4096}
     async with client as c:
         await c.put("/api/agent/config", json={**body, "api_key": "sk-gone"})
         r = await c.put("/api/agent/config", json={**body, "api_key": ""})

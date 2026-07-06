@@ -21,7 +21,6 @@ class AgentConfigBody(BaseModel):
     max_tool_calls: int = Field(15, ge=1, le=50)
     deep_dive_limit: int = Field(5, ge=0, le=20)
     credential_id: Optional[int] = None
-    push_verdict: bool = False
     enabled: bool = False
 
 

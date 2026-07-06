@@ -133,7 +133,7 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
     entries = [(sym, label, res)
                for res, sigs in signals_by_res.items()
                for sym, labels in sigs.items() for label in labels]
-    signal_id_map = _record_signals(task_id, entries)
+    _record_signals(task_id, entries)
 
     if "chart_shot" in actions and channel:
         for sym in list(all_signals.keys())[:3]:
@@ -183,7 +183,7 @@ def _exec_market_scan(task_id, config, actions, channel):
 
     entries = [(sym, r["label"], r["resolution"])
                for r in all_results for sym in r["symbols"] if sym in overlaps]
-    signal_id_map = _record_signals(task_id, entries)
+    _record_signals(task_id, entries)
 
     if "chart_shot" in actions and channel and overlaps:
         shot_threshold = config.get("screenshot_threshold", 3)

@@ -99,6 +99,7 @@ Cookie-based sessions using `itsdangerous.URLSafeTimedSerializer`. Single shared
 | `PROXY_PORT` | `24000` | Proxy port |
 | `CACHE_TTL` | `15` | Market data cache TTL (seconds) |
 | `MIN_VOLUME_24H` | `100000` | Minimum 24h volume filter |
+| `CHAT_UPLOADS_DIR` | `data/chat_uploads` | Chat 图片上传目录 |
 
 ## Conventions
 

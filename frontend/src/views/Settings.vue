@@ -288,24 +288,14 @@
         <input v-model.number="agentForm.deep_dive_limit" type="number" min="0" max="20" />
       </div>
 
-      <div class="form-row">
-        <div class="form-group">
-          <label>绑定交易凭据（可选，用于只读仓位规划预览）</label>
-          <select v-model="agentForm.credential_id">
-            <option :value="null">不使用</option>
-            <option v-for="c in tradingCreds" :key="c.id" :value="c.id">
-              {{ c.label }}（{{ c.env === 'mainnet' ? '实盘' : '测试网' }}）
-            </option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>完成后推送裁决摘要</label>
-          <label class="toggle-label">
-            <input type="checkbox" v-model="agentForm.push_verdict" class="toggle-cb" />
-            <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            <span>{{ agentForm.push_verdict ? '推送' : '不推送' }}</span>
-          </label>
-        </div>
+      <div class="form-group">
+        <label>绑定交易凭据（可选，用于只读仓位规划预览）</label>
+        <select v-model="agentForm.credential_id">
+          <option :value="null">不使用</option>
+          <option v-for="c in tradingCreds" :key="c.id" :value="c.id">
+            {{ c.label }}（{{ c.env === 'mainnet' ? '实盘' : '测试网' }}）
+          </option>
+        </select>
       </div>
 
       <div class="btn-row">
@@ -599,7 +589,6 @@ const agentForm = ref({
   max_tool_calls: 15,
   deep_dive_limit: 5,
   credential_id: null,
-  push_verdict: false,
 })
 const agentHasApiKey = ref(false)
 const agentApiKeyInput = ref('')
@@ -626,7 +615,6 @@ async function loadAgentConfig() {
       max_tool_calls: r.max_tool_calls ?? 15,
       deep_dive_limit: r.deep_dive_limit ?? 5,
       credential_id: r.credential_id ?? null,
-      push_verdict: r.push_verdict ?? false,
     }
   } catch {}
 }

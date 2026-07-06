@@ -23,6 +23,26 @@ def test_worker_drains_queue_and_recovers():
     assert done == [t_new]                       # 只处理 queued 的
     # stale running 被判 failed 且有事件
     assert [e["type"] for e in events.turn_events(t_stale)] == ["turn_error"]
+    # 且写入可重试的 assistant 错误消息（前端悬空兜底，靠此驱动重试按钮）
+    msgs = store.list_messages(sid)
+    assert msgs[-1]["role"] == "assistant" and msgs[-1]["error"] == "服务重启中断，可重试"
+
+
+def test_worker_crash_backstop_writes_assistant_error():
+    sid = store.create_session()
+    store.create_turn(sid, store.add_message(sid, "user", "hi"))
+
+    with patch.object(worker, "_process", side_effect=RuntimeError("boom")):
+        worker.start_worker(interval=0.05)
+        try:
+            deadline = time.monotonic() + 3
+            while store.active_turn(sid) is not None and time.monotonic() < deadline:
+                time.sleep(0.05)
+        finally:
+            worker.stop_worker()
+
+    msgs = store.list_messages(sid)
+    assert msgs[-1]["role"] == "assistant" and msgs[-1]["error"] == "boom"
 
 
 def test_worker_seed_semantics_on_start():

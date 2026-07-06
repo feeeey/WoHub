@@ -179,6 +179,7 @@ function closeStream() {
 // 单一事件应用逻辑：实时 on() 与断线重连后的历史回放（replayEvent）共用，
 // 避免同一套 text_delta/tool_start/… 处理分叉成两份容易漂移的代码。
 function replayEvent(type, p) {
+  if (!p || p._truncated) return
   if (type === 'text_delta') { live.active = true; live.text += p.text }
   else if (type === 'tool_start') {
     live.active = true
@@ -237,9 +238,13 @@ async function selectSession(id) {
   resetLive()
   const data = await api.getChatMessages(id)
   messages.value = data.messages
-  lastEventId = data.last_event_id
+  // 游标取自最后一条回放事件本身，避免用（晚查询、可能更大的）全局 last_event_id
+  // 导致跟播时漏掉回放与开流之间产生的事件
+  lastEventId = (data.active_turn && data.active_events.length)
+    ? data.active_events[data.active_events.length - 1].id
+    : data.last_event_id
   if (data.active_turn) {
-    // 恢复进行中轮次：先回放已有事件，再从 last_event_id 跟播
+    // 恢复进行中轮次：先回放已有事件，再从 lastEventId 跟播
     live.active = true
     live.turnId = data.active_turn.id
     for (const ev of data.active_events) replayEvent(ev.type, ev.payload)

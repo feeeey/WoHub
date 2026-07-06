@@ -27,6 +27,11 @@ def _loop(interval):
                 applog("chat", "error", f"turn #{row['id']} crashed: {e!r}")
                 events.append_event(row["id"], "turn_error", {"error": str(e)[:500]})
                 store.finish_turn(row["id"], "failed")
+                try:
+                    store.add_message(row["session_id"], "assistant", "",
+                                      error=str(e)[:2000])
+                except Exception:
+                    pass                           # 兜底的兜底：绝不能把 worker 循环带崩
         except Exception as e:
             applog("chat", "error", f"worker loop: {e!r}")
 
@@ -35,9 +40,12 @@ def start_worker(interval=0.5):
     global _thread
     if _thread and _thread.is_alive():
         return
-    # 启动恢复：running→failed（补事件），queued 保留由循环自然续跑
-    for tid in store.recover_interrupted():
-        events.append_event(tid, "turn_error", {"error": "服务重启中断，可重试"})
+    # 启动恢复：running→failed（补事件 + assistant 错误消息，前端才有重试按钮），
+    # queued 保留由循环自然续跑
+    for t in store.recover_interrupted():
+        events.append_event(t["id"], "turn_error", {"error": "服务重启中断，可重试"})
+        store.add_message(t["session_id"], "assistant", "",
+                          error="服务重启中断，可重试")
     from agent.chat.semantics import seed_defaults
     seed_defaults()
     _stop.clear()

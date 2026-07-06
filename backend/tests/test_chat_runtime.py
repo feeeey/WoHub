@@ -80,3 +80,72 @@ def test_disabled_agent_fails_fast():
     row = store.claim_next_turn()
     runtime.run_turn(row)
     assert _types(tid)[-1] == "turn_error"
+
+
+def test_cancel_inside_tool_blocks_next_tool():
+    """第一个工具执行完成后请求取消 → 第二个工具调用的 pre-exec 检查点必须拦截。
+
+    适配说明：规格草稿里让模型在同一次响应中通过两个 DeltaToolCall 一次性
+    发出两个工具调用，意图是"顺序执行、第一个的副作用能在第二个开始前生效"。
+    但 pydantic-ai 1.107.0 中同响应内的多个工具调用默认以
+    parallel_execution_mode='parallel' 执行（backend 用 run_in_executor 把同步
+    工具函数丢进线程池），两个调用可能在不同线程里几乎同时开始，先后顺序不受
+    保证——会让这个断言变成竞态。改为让模型分两轮 model_request 顺序发出两次
+    工具调用（agent.iter 的 tool 节点天然顺序执行，不存在并行歧义），断言契约
+    （恰好 1 个 tool_start、终态 cancelled、trace 带 prompt_version）不变。
+    """
+    sid, mid, row = _prep("对比两个币")
+    calls = {"n": 0}
+
+    async def stream_fn(messages, info: AgentInfo):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            yield {0: DeltaToolCall(name="get_market_snapshot",
+                                    json_args='{"symbols": ["BTCUSDT"]}')}
+        elif calls["n"] == 2:
+            yield {0: DeltaToolCall(name="get_market_snapshot",
+                                    json_args='{"symbols": ["ETHUSDT"]}')}
+        else:
+            yield "不应到达这里"
+
+    from unittest.mock import patch
+
+    def snap_and_cancel(symbols):
+        store.request_cancel(row["id"])
+        return {symbols[0]: {"lastPrice": 1}}
+
+    with patch("agent.tools.market_snapshot", side_effect=snap_and_cancel):
+        runtime.run_turn(row, model_override=FunctionModel(stream_function=stream_fn))
+    types = _types(row["id"])
+    assert types[-1] == "cancelled"
+    assert types.count("tool_start") == 1          # 第二个工具在 emit 前就被拦截
+    msgs = store.list_messages(sid)
+    assert msgs[-1]["error"] == "cancelled"
+    assert msgs[-1]["trace"]["prompt_version"]      # Finding 4 的回归断言
+
+
+def test_cancel_between_stream_chunks():
+    """流式块之间的检查点：第二块 flush 后必须触发取消，且已出文本保留。
+
+    适配说明：实测发现 pydantic-ai 1.107.0 的 FunctionModel 对同一个
+    vendor_part_id 的第一次文本产出会走 PartStartEvent（新建 TextPart），
+    只有第二次及之后才是 PartDeltaEvent(TextPartDelta)；而 `_drive()` 只订阅
+    PartDeltaEvent，因此一次响应里"第一个文本块"天然不会进入 `buf`——这与
+    FLUSH_CHARS 阈值或时间窗口无关，纯粹是事件类型。为了让断言仍然覆盖
+    "超过 FLUSH_CHARS 触发 flush+检查" 与 "取消后终态 cancelled 且已发出文本
+    保留" 这两个契约点，这里先发一个不参与断言的极短占位块把 TextPart
+    "开起来"，再用两个真正的大块（各 500 字）走 delta 路径触发 flush。
+    """
+    sid, mid, row = _prep("讲个长故事")
+
+    async def stream_fn(messages, info: AgentInfo):
+        yield "…"                                   # 占位块：走 PartStartEvent，不进 buf，不参与断言
+        yield "甲" * 500                            # PartDeltaEvent，超过 FLUSH_CHARS，flush + 检查（未取消）
+        store.request_cancel(row["id"])
+        yield "乙" * 500                            # flush 后检查点触发 TurnCancelled
+
+    runtime.run_turn(row, model_override=FunctionModel(stream_function=stream_fn))
+    types = _types(row["id"])
+    assert types[-1] == "cancelled"
+    last = store.list_messages(sid)[-1]
+    assert "甲" in last["content"]                  # 部分文本已持久化

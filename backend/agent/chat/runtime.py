@@ -19,7 +19,8 @@ from agent.chat.prompts import build_system_prompt, render_history, CHAT_PROMPT_
 HISTORY_LIMIT = 20          # 发给模型的历史消息条数上限（规格 §4）
 FLUSH_INTERVAL = 0.1        # text_delta 聚合窗口（秒）
 FLUSH_CHARS = 400
-RESULT_TRUNC = 2000         # 工具结果截断（trace 与回传模型同规则）
+RESULT_TRUNC = 2000         # 工具结果截断（trace 与事件摘要）
+MODEL_RESULT_CAP = 24000    # 模型侧兜底：防病态大结果撑爆上下文；正常工具输出（如 300 根K线）不受影响
 
 
 class TurnCancelled(Exception):
@@ -80,11 +81,16 @@ def _tool(ctx: RunContext[ChatDeps], name: str, args: dict, fn) -> dict:
         raise
     except Exception as e:                      # 工具失败不终止轮次：错误回传模型
         out = {"error": f"工具执行异常: {e}"}
+    full = json.dumps(out, ensure_ascii=False)
     ok = not (isinstance(out, dict) and out.get("error"))
-    raw = json.dumps(out, ensure_ascii=False)[:RESULT_TRUNC]
+    raw = full[:RESULT_TRUNC]
     d.trace.append({"tool": name, "args": args, "result": raw})
     d.emit("tool_end", {"tool": name, "ok": ok, "summary": raw[:400],
                         "elapsed_ms": int((time.monotonic() - t0) * 1000)})
+    if len(full) > MODEL_RESULT_CAP:
+        return {"_truncated": True,
+                "hint": "结果过大已截断，请用更小的参数重试（如降低 limit / 缩小扫描范围）",
+                "preview": full[:MODEL_RESULT_CAP]}
     return out
 
 
@@ -214,6 +220,35 @@ def _usage_tokens(run) -> tuple[int, int]:
     return it, ot
 
 
+def _finalize_abnormal(deps: ChatDeps, buf: _DeltaBuffer, session_id: int,
+                       turn_id: int, status: str, error: str | None) -> None:
+    """异常出口的尽力收尾：每步独立兜底，finish_turn 永远最后尝试——
+    保证 turn 不会卡死在 running。"""
+    try:
+        buf.flush()
+    except Exception:
+        pass
+    try:
+        content = buf.full_text() or ("（已停止）" if status == "cancelled" else "")
+        store.add_message(session_id, "assistant", content,
+                          trace={"prompt_version": CHAT_PROMPT_VERSION,
+                                 "steps": deps.trace},
+                          error="cancelled" if status == "cancelled" else error)
+    except Exception as e:
+        applog("chat", "error", f"finalize add_message failed: {e!r}")
+    try:
+        if status == "cancelled":
+            deps.emit("cancelled", {})
+        else:
+            deps.emit("turn_error", {"error": (error or "")[:500]})
+    except Exception as e:
+        applog("chat", "error", f"finalize emit failed: {e!r}")
+    try:
+        store.finish_turn(turn_id, status)
+    except Exception as e:
+        applog("chat", "error", f"finalize finish_turn failed: {e!r}")
+
+
 def run_turn(turn_row, model_override=None) -> None:
     """worker 线程入口。所有出口都保证：turn 有终态 + 有对应事件。"""
     turn_id, session_id = turn_row["id"], turn_row["session_id"]
@@ -242,20 +277,15 @@ def run_turn(turn_row, model_override=None) -> None:
         deps.emit("turn_done", {"message_id": mid,
                                 "input_tokens": in_tok, "output_tokens": out_tok})
         store.finish_turn(turn_id, "done")
-        _maybe_autotitle(session_id, current)
+        try:
+            _maybe_autotitle(session_id, current)
+        except Exception as e:
+            applog("chat", "warn", f"autotitle failed: {e!r}")
     except TurnCancelled:
-        buf.flush()
-        store.add_message(session_id, "assistant", buf.full_text() or "（已停止）",
-                          trace={"steps": deps.trace}, error="cancelled")
-        deps.emit("cancelled", {})
-        store.finish_turn(turn_id, "cancelled")
+        _finalize_abnormal(deps, buf, session_id, turn_id, "cancelled", None)
     except Exception as e:
         applog("chat", "error", f"turn #{turn_id} failed: {e!r}")
-        buf.flush()
-        store.add_message(session_id, "assistant", buf.full_text(),
-                          trace={"steps": deps.trace}, error=str(e)[:2000])
-        deps.emit("turn_error", {"error": str(e)[:500]})
-        store.finish_turn(turn_id, "failed")
+        _finalize_abnormal(deps, buf, session_id, turn_id, "failed", str(e)[:2000])
 
 
 def _maybe_autotitle(session_id: int, current: dict) -> None:

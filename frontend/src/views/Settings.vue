@@ -239,16 +239,14 @@
 
       <div class="form-row">
         <div class="form-group">
-          <label>模型 <button type="button" class="btn-inline" @click="loadModels">刷新列表</button></label>
-          <input v-model="agentForm.model" list="agent-model-list"
-                 placeholder="例：deepseek/deepseek-v4-pro（可手输或从列表选）" />
-          <datalist id="agent-model-list">
-            <option v-for="m in modelList" :key="m" :value="m" />
-          </datalist>
+          <label>模型 <button type="button" class="btn-inline" @click="openModelPicker('model')">选择</button></label>
+          <input v-model="agentForm.model"
+                 placeholder="例：deepseek/deepseek-v4-pro（可手输或点「选择」浏览）" />
         </div>
         <div class="form-group">
-          <label>视觉模型（可选，识图/截图分析用）</label>
-          <input v-model="agentForm.vision_model" list="agent-model-list"
+          <label>视觉模型（可选，识图/截图分析用）
+            <button type="button" class="btn-inline" @click="openModelPicker('vision_model')">选择</button></label>
+          <input v-model="agentForm.vision_model"
                  placeholder="留空 = 图片直传主模型（主模型须多模态）" />
         </div>
         <div class="form-group">
@@ -270,6 +268,27 @@
           </div>
           <div v-if="agentApiKeyClearedFlag" class="key-clear-hint">提交后将清除已存密钥</div>
         </div>
+      </div>
+
+      <div v-if="modelPickerFor" class="model-picker">
+        <div class="picker-head">
+          <strong>选择{{ modelPickerFor === 'model' ? '模型' : '视觉模型' }}</strong>
+          <input v-model="modelFilter" class="picker-search"
+                 placeholder="搜索（如 deepseek / gemini / claude）…" />
+          <button type="button" class="btn-inline" :disabled="pickerLoading" @click="loadModels">
+            {{ pickerLoading ? '加载中…' : '刷新' }}</button>
+          <button type="button" class="btn-inline" @click="modelPickerFor = null">关闭</button>
+        </div>
+        <div v-if="pickerError" class="picker-empty">{{ pickerError }}</div>
+        <div v-else-if="pickerLoading && !modelList.length" class="picker-empty">正在拉取模型列表…</div>
+        <div v-else-if="!filteredModels.length" class="picker-empty">无匹配模型</div>
+        <template v-else>
+          <div class="picker-opts">
+            <div v-for="m in filteredModels" :key="m" class="picker-opt"
+                 :class="{ active: agentForm[modelPickerFor] === m }" @click="pickModel(m)">{{ m }}</div>
+          </div>
+          <div class="picker-count">{{ filteredModels.length }} / {{ modelList.length }} 个模型（点击填入）</div>
+        </template>
       </div>
 
       <div class="form-row">
@@ -655,9 +674,38 @@ function agentOverrides() {
   return o
 }
 
+const modelPickerFor = ref(null)          // null | 'model' | 'vision_model'
+const modelFilter = ref('')
+const pickerLoading = ref(false)
+const pickerError = ref('')
+
+const filteredModels = computed(() => {
+  const q = modelFilter.value.trim().toLowerCase()
+  const all = q ? modelList.value.filter(m => m.toLowerCase().includes(q)) : modelList.value
+  return all.slice(0, 300)
+})
+
+async function openModelPicker(field) {
+  modelPickerFor.value = field
+  modelFilter.value = ''
+  if (!modelList.value.length) await loadModels()
+}
+
+function pickModel(m) {
+  agentForm.value[modelPickerFor.value] = m
+  modelPickerFor.value = null
+}
+
 async function loadModels() {
-  try { modelList.value = (await api.fetchAgentModels(agentOverrides())).models }
-  catch (e) { alert('模型列表获取失败：' + e.message) }
+  pickerLoading.value = true
+  pickerError.value = ''
+  try {
+    modelList.value = (await api.fetchAgentModels(agentOverrides())).models
+  } catch (e) {
+    pickerError.value = '模型列表获取失败：' + e.message
+  } finally {
+    pickerLoading.value = false
+  }
 }
 
 async function testLlm() {
@@ -1031,6 +1079,20 @@ onMounted(() => {
 }
 
 .btn-inline { font-size: 12px; padding: 1px 8px; margin-left: 8px; cursor: pointer; }
+.model-picker { border: 1px solid var(--border-strong, rgba(128,128,128,.3)); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 14px; background: var(--bg-tertiary, rgba(128,128,128,.06)); }
+.picker-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.picker-search { flex: 1; padding: 5px 10px; border-radius: 6px; font-size: 13px;
+  border: 1px solid var(--border-strong, rgba(128,128,128,.3));
+  background: var(--bg-secondary, transparent); color: inherit; }
+.picker-opts { max-height: 260px; overflow-y: auto; display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 2px; }
+.picker-opt { padding: 4px 10px; border-radius: 6px; font-size: 12.5px; cursor: pointer;
+  font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-opt:hover { background: var(--accent-subtle, rgba(200,110,60,.15)); }
+.picker-opt.active { background: var(--accent-subtle, rgba(200,110,60,.25)); font-weight: 600; }
+.picker-empty { padding: 12px; font-size: 13px; opacity: .7; }
+.picker-count { margin-top: 6px; font-size: 11.5px; opacity: .55; text-align: right; }
 .test-result { font-size: 12.5px; margin-left: 10px; }
 
 /* ---- Screener semantics ---- */

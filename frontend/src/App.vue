@@ -48,7 +48,7 @@
         </div>
       </div>
     </aside>
-    <main class="main-content">
+    <main class="main-content" :class="{ 'full-bleed': route.meta.fullBleed }">
       <router-view v-slot="{ Component }">
         <transition name="route" mode="out-in">
           <component :is="Component" />

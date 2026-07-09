@@ -17,7 +17,7 @@ const routes = [
   { path: '/trade', component: Trade },
   // backward-compat alias: K线形态 used to live at /klines
   { path: '/klines', redirect: '/trade' },
-  { path: '/agent', component: Chat },
+  { path: '/agent', component: Chat, meta: { fullBleed: true } },
   { path: '/channels', component: Channels },
   { path: '/settings', component: Settings },
 ]

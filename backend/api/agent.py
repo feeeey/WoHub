@@ -95,7 +95,9 @@ def _probe_text(cfg) -> dict:
     try:
         from pydantic_ai import Agent
         agent = Agent(build_model(cfg), output_type=str)
-        agent.run_sync("回复一个字：好", model_settings={"max_tokens": 16})
+        # 思考型模型（如 deepseek-v4-pro）先消耗推理 token 再输出——
+        # 预算必须容纳整段思考，太小会在产出任何文字前被截断
+        agent.run_sync("回复一个字：好", model_settings={"max_tokens": 2048})
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
@@ -107,7 +109,7 @@ def _probe_vision(cfg) -> dict:
         agent = Agent(build_model(cfg, model_name=cfg.vision_model), output_type=str)
         agent.run_sync(["图中是什么颜色？一词回答。",
                         BinaryContent(data=_PROBE_PNG, media_type="image/png")],
-                       model_settings={"max_tokens": 16})
+                       model_settings={"max_tokens": 2048})
         return {"ok": True, "supports_image": True}
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}

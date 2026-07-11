@@ -2,12 +2,9 @@ import os
 import pytest
 from unittest.mock import patch
 from pydantic_ai.models.test import TestModel
-from agent.config import save_config, load_config
+from agent.config import load_config
 from agent.chat import store, vision, runtime
-try:
-    from tests.helpers import save_config_with_channel
-except ImportError:
-    from helpers import save_config_with_channel
+from tests.helpers import save_config_with_channel
 
 PNG_1PX = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
            b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff"

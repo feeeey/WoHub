@@ -258,6 +258,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 "VALUES ('默认渠道', ?, ?, ?)", (row[0], row[1], row[2]))
             conn.execute("UPDATE agent_config SET channel_id = ? WHERE id = 1",
                          (cur.lastrowid,))
+            # 迁移完成后清空休眠源列：否则删除回填出的渠道后重启会因该列非空而复活它
+            conn.execute("UPDATE agent_config SET api_key_enc = NULL WHERE id = 1")
 
 
 def init_db(db_path: str) -> None:

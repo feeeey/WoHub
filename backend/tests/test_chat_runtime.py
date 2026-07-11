@@ -6,7 +6,7 @@ from agent.config import save_config
 
 
 def _prep(content="看下大盘"):
-    save_config({"provider": "openai", "model": "m", "api_key": "k", "enabled": True})
+    save_config({"model": "m", "enabled": True})
     sid = store.create_session()
     mid = store.add_message(sid, "user", content)
     tid = store.create_turn(sid, mid)
@@ -159,3 +159,16 @@ def test_first_stream_chunk_not_lost():
     last = store.list_messages(sid)[-1]
     assert last["content"] == "首块，后续"
     assert last["error"] is None
+
+
+def test_run_turn_fails_fast_without_channel():
+    """enabled=True 但无渠道、且无 model_override → has_llm 门禁必须在调用前拦截。"""
+    save_config({"model": "m", "enabled": True, "channel_id": None})
+    sid = store.create_session()
+    store.create_turn(sid, store.add_message(sid, "user", "hi"))
+    row = store.claim_next_turn()
+    runtime.run_turn(row)                          # 无 model_override
+    evs = [e["type"] for e in events.turn_events(row["id"])]
+    assert evs[-1] == "turn_error"
+    msgs = store.list_messages(sid)
+    assert "渠道" in (msgs[-1]["error"] or "")

@@ -40,7 +40,7 @@ def get_config():
 
 @router.put("/config")
 def put_config(body: AgentConfigBody):
-    save_config(body.model_dump())
+    save_config(body.model_dump(exclude_unset=True))
     return _public(load_config())
 
 
@@ -180,7 +180,8 @@ def test_llm(body: TestBody):
     out = {"main": _probe_text(main_ch, model), "vision": None}
     vision_model = cfg.vision_model if body.vision_model is None else body.vision_model
     if vision_model:
-        vch = get_channel(body.vision_channel_id) if body.vision_channel_id else main_ch
+        vch = (get_channel(body.vision_channel_id) if body.vision_channel_id
+               else (cfg.vision_channel if cfg.vision_channel_id else main_ch))
         if vch is None or not vch.api_key:
             out["vision"] = {"ok": False, "channel": "-",
                              "error": "视觉渠道未配置或缺少 API Key"}

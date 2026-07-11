@@ -72,6 +72,25 @@ async def test_llm_test_per_slot_channels(client):
 
 
 @pytest.mark.asyncio
+async def test_llm_test_uses_saved_vision_channel_when_body_omits_it(client):
+    from agent.config import save_channel, save_config
+    save_config_with_channel(vision_model="vm")
+    vid = save_channel({"name": "视觉专用", "provider": "openai", "base_url": "", "api_key": "sk-v"})
+    save_config({"vision_channel_id": vid})
+    seen = {}
+
+    def fake_vision(channel, model_name):
+        seen["vision"] = (channel.id, model_name)
+        return {"ok": True, "channel": channel.name, "supports_image": True}
+
+    with patch("api.agent._probe_text", return_value={"ok": True, "channel": "t"}), \
+         patch("api.agent._probe_vision", side_effect=fake_vision):
+        async with client as c:
+            r = (await c.post("/api/agent/test", json={})).json()
+    assert seen["vision"] == (vid, "vm") and r["vision"]["channel"] == "视觉专用"
+
+
+@pytest.mark.asyncio
 async def test_semantics_get_seeds_and_put_updates(client):
     async with client as c:
         rows = (await c.get("/api/agent/semantics")).json()

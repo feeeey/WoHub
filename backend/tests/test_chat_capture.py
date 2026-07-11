@@ -2,7 +2,6 @@ from unittest.mock import patch
 from pydantic_ai.models.function import FunctionModel, AgentInfo, DeltaToolCall
 from agent import tools as T
 from agent.chat import store, events, runtime
-from agent.config import save_config
 
 
 def test_capture_chart_wraps_chartshot():

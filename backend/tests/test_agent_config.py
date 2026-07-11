@@ -33,3 +33,13 @@ def test_load_config_decrypts_key_via_channel():
     from agent.config import load_config
     save_config_with_channel(channel_api_key="k123")
     assert load_config().main_channel.api_key == "k123"
+
+
+@pytest.mark.asyncio
+async def test_put_config_omitted_channel_id_is_noop(client):
+    cid = save_config_with_channel()
+    async with client as c:
+        r = await c.put("/api/agent/config", json={"model": "m2", "enabled": True})
+        assert r.status_code == 200
+        body = (await c.get("/api/agent/config")).json()
+    assert body["channel_id"] == cid and body["model"] == "m2"

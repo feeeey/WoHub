@@ -71,8 +71,9 @@ klines/indicators/structure, market snapshot/overview, signal history,
 ChartShot capture + vision relay, position-plan preview, account overview) and
 throttled; per-turn `max_tool_calls` + `deep_dive_limit` budgets. Screener
 semantics profiles live in `screener_semantics` (Settings-editable, injected
-into the system prompt). Vision uses a separate `vision_model` slot (same
-provider/key). Red lines: `backend/agent/` never imports order-placing
+into the system prompt). Vision uses a separate `vision_model` slot on its
+own channel (`vision_channel_id`, NULL = follow main channel). Red lines:
+`backend/agent/` never imports order-placing
 functions; execution always goes through the human-confirmed Trade page
 (`/trade?symbol=…&direction=…` prefill). Design docs:
 `docs/superpowers/specs/2026-07-04-chat-agent-design.md`.

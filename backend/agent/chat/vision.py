@@ -27,7 +27,7 @@ def load_image(kind: str, filename: str) -> tuple[bytes, str]:
 
 def describe_image(cfg, image_bytes: bytes, media_type: str, extra: str = "") -> str:
     from pydantic_ai import BinaryContent
-    model = build_model(cfg, model_name=cfg.vision_model)
+    model = build_model(cfg.vision_channel, cfg.vision_model)
     agent = Agent(model, output_type=str, system_prompt=VISION_SYSTEM)
     prompt = [extra or "请读取并描述这张K线图。",
               BinaryContent(data=image_bytes, media_type=media_type)]

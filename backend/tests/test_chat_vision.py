@@ -4,6 +4,10 @@ from unittest.mock import patch
 from pydantic_ai.models.test import TestModel
 from agent.config import save_config, load_config
 from agent.chat import store, vision, runtime
+try:
+    from tests.helpers import save_config_with_channel
+except ImportError:
+    from helpers import save_config_with_channel
 
 PNG_1PX = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
            b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff"
@@ -11,20 +15,19 @@ PNG_1PX = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01
 
 
 def test_config_roundtrips_vision_model():
-    save_config({"provider": "openai", "model": "m", "api_key": "k",
-                 "vision_model": "gemini-vision", "enabled": True})
+    save_config_with_channel(vision_model="gemini-vision")
     assert load_config().vision_model == "gemini-vision"
 
 
 def test_describe_image_uses_vision_model_slot():
-    save_config({"provider": "openai", "model": "m", "api_key": "k",
-                 "vision_model": "v", "enabled": True})
+    save_config_with_channel(vision_model="v")
     cfg = load_config()
     with patch("agent.chat.vision.build_model",
                return_value=TestModel(call_tools=[], custom_output_text="上升趋势，MACD 金叉")) as bm:
         out = vision.describe_image(cfg, PNG_1PX, "image/png")
     assert "上升趋势" in out
-    assert bm.call_args.kwargs.get("model_name") == "v" or bm.call_args.args[1:] == ("v",)
+    assert bm.call_args.args[1] == "v"               # build_model(channel, model_name)
+    assert bm.call_args.args[0].id == cfg.vision_channel.id
 
 
 def test_load_image_reads_upload_dir(tmp_path):
@@ -49,8 +52,7 @@ def _turn_with_image(tmp_path):
 
 
 def test_runtime_relays_image_when_vision_configured(tmp_path):
-    save_config({"provider": "openai", "model": "m", "api_key": "k",
-                 "vision_model": "v", "enabled": True})
+    save_config_with_channel(vision_model="v")
     sid, row = _turn_with_image(tmp_path)
     with patch("agent.chat.runtime.describe_image",
                return_value="图为BTC 4h，回踩EMA55") as di:
@@ -62,8 +64,7 @@ def test_runtime_relays_image_when_vision_configured(tmp_path):
 
 
 def test_runtime_passes_binary_when_no_vision_model(tmp_path):
-    save_config({"provider": "openai", "model": "m", "api_key": "k",
-                 "vision_model": "", "enabled": True})
+    save_config_with_channel(vision_model="")
     sid, row = _turn_with_image(tmp_path)
     runtime.run_turn(row, model_override=TestModel(call_tools=[], custom_output_text="ok"))
     # 直传路径：不调用中继，轮次正常完成（TestModel 接受多模态输入）

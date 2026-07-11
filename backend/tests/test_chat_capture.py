@@ -16,8 +16,8 @@ def test_capture_chart_wraps_chartshot():
 
 
 def _prep(vision="v"):
-    save_config({"provider": "openai", "model": "m", "api_key": "k",
-                 "vision_model": vision, "enabled": True})
+    from tests.helpers import save_config_with_channel
+    save_config_with_channel(vision_model=vision)
     sid = store.create_session()
     tid = store.create_turn(sid, store.add_message(sid, "user", "截图看下 BTC 1h"))
     return sid, store.claim_next_turn()

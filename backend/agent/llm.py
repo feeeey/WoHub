@@ -5,15 +5,16 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
 
-def build_model(cfg, model_name: str | None = None):
-    """构建 LLM 模型实例（Anthropic/OpenAI）。model_name 覆盖 cfg.model
-    （视觉模型槽位用）。"""
-    if not cfg.api_key:
-        raise ValueError("agent LLM api_key 未配置")
-    name = model_name or cfg.model
-    if cfg.provider == "anthropic":
-        return AnthropicModel(name, provider=AnthropicProvider(api_key=cfg.api_key))
-    kwargs = {"api_key": cfg.api_key}
-    if cfg.base_url:
-        kwargs["base_url"] = cfg.base_url
-    return OpenAIChatModel(name, provider=OpenAIProvider(**kwargs))
+def build_model(channel, model_name: str):
+    """从「渠道 + 模型名」构建 LLM 实例。channel: agent.config.Channel。"""
+    if channel is None or not channel.api_key:
+        raise ValueError("LLM 渠道未配置或缺少 API Key")
+    if not model_name:
+        raise ValueError("模型名为空")
+    if channel.provider == "anthropic":
+        return AnthropicModel(model_name,
+                              provider=AnthropicProvider(api_key=channel.api_key))
+    kwargs = {"api_key": channel.api_key}
+    if channel.base_url:
+        kwargs["base_url"] = channel.base_url
+    return OpenAIChatModel(model_name, provider=OpenAIProvider(**kwargs))

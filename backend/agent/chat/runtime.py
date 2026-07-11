@@ -160,7 +160,7 @@ def _build_agent(cfg, model) -> Agent:
                      lambda: T.run_screener_scan(screener_keys, timeframes,
                                                  watchlist_id, progress_cb=cb))
 
-    if cfg.vision_model:
+    if cfg.vision_model and cfg.vision_channel:
         @agent.tool
         def capture_chart(ctx: RunContext[ChatDeps], symbol: str, interval: str) -> dict:
             """截取 TradingView 实时图表并做视觉分析（长任务，占深评配额）。
@@ -317,10 +317,11 @@ def run_turn(turn_row, model_override=None) -> None:
     try:
         if store.cancel_requested(turn_id):
             raise TurnCancelled()
-        if not cfg.enabled or (not cfg.api_key and model_override is None):
-            raise RuntimeError("Agent 未启用或未配置 API Key（请到系统设置页配置）")
+        has_llm = cfg.main_channel is not None and bool(cfg.main_channel.api_key)
+        if not cfg.enabled or (not has_llm and model_override is None):
+            raise RuntimeError("Agent 未启用或未配置 LLM 渠道（请到系统设置页配置）")
         prompt, current = _build_prompt(session_id, turn_row["user_message_id"], cfg, deps)
-        model = model_override or build_model(cfg)
+        model = model_override or build_model(cfg.main_channel, cfg.model)
         agent = _build_agent(cfg, model)
         run = asyncio.run(_drive(agent, prompt, deps, cfg, buf))
         buf.flush()

@@ -43,7 +43,7 @@ pytest -m "not network"       # Skip live API tests
 - `backend/api/` — FastAPI routers: health, market, channels, tasks, settings, scanner, screenshots, klines, trading
 - `backend/sources/` — Data fetching: `pine_screener.py` (TradingView), individual exchange clients (Binance, OKX, Bybit, Bitget), `chart_shot_client.py`
 - `backend/tasks/` — `scheduler.py` (APScheduler cron/interval jobs), `executor.py` (task execution pipeline), `tracker.py` + `outcome_poller.py` (persistent signal outcome tracking at 1h/4h/24h, restart-safe)
-- `backend/agent/` — chat agent: `chat/` (store/events/runtime/worker/vision/semantics/prompts), `tools.py` (read-only, throttled), `decider.py` (RuleDecider — task-pipeline threshold logic), `config.py` (Fernet key + vision_model), `llm.py`, `validator.py` (stub)
+- `backend/agent/` — chat agent: `chat/` (store/events/runtime/worker/vision/semantics/prompts), `tools.py` (read-only, throttled), `decider.py` (RuleDecider — task-pipeline threshold logic), `config.py` (llm_channels 渠道 CRUD + 双槽位渠道解析 + Fernet key), `llm.py`, `validator.py` (stub)
 - `backend/channels/` — Notification dispatch: `telegram.py`, `discord.py`, `sender.py`
 - `backend/trading/` — Binance USDT-M client, credential encryption, order service (bracket + SL recovery), position planning
 - `backend/klines/` — Candlestick fetch, pattern detection, classification, market structure (pivots, ATR)
@@ -79,7 +79,7 @@ functions; execution always goes through the human-confirmed Trade page
 
 ### Database
 
-Single SQLite file at `data/wohub.db`. Schema defined in `backend/database.py` (SCHEMA constant, append-only — editing existing CREATE TABLE bodies is a silent no-op). Key tables: channels, tasks, signals, snapshots, outcomes, outcome_checks, push_logs, screenshots, trading_credentials, trading_orders, agent_config, agent_runs (dormant — retained to avoid migration risk, no code writes), agent_decisions (dormant), chat_sessions, chat_messages, chat_turns, chat_events, screener_semantics.
+Single SQLite file at `data/wohub.db`. Schema defined in `backend/database.py` (SCHEMA constant, append-only — editing existing CREATE TABLE bodies is a silent no-op). Key tables: channels, tasks, signals, snapshots, outcomes, outcome_checks, push_logs, screenshots, trading_credentials, trading_orders, agent_config, agent_runs (dormant — retained to avoid migration risk, no code writes), agent_decisions (dormant), chat_sessions, chat_messages, chat_turns, chat_events, screener_semantics, llm_channels.
 
 ### Auth
 

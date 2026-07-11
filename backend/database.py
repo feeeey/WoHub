@@ -226,6 +226,15 @@ CREATE TABLE IF NOT EXISTS screener_semantics (
     combos TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS llm_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    provider TEXT NOT NULL DEFAULT 'openai' CHECK (provider IN ('openai', 'anthropic')),
+    base_url TEXT NOT NULL DEFAULT '',
+    api_key_enc TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -235,6 +244,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_config)")}
     if "vision_model" not in cols:
         conn.execute("ALTER TABLE agent_config ADD COLUMN vision_model TEXT NOT NULL DEFAULT ''")
+    if "channel_id" not in cols:
+        conn.execute("ALTER TABLE agent_config ADD COLUMN channel_id INTEGER")
+    if "vision_channel_id" not in cols:
+        conn.execute("ALTER TABLE agent_config ADD COLUMN vision_channel_id INTEGER")
+    # 单渠道旧配置 → 「默认渠道」。仅在 llm_channels 为空时执行（幂等）。
+    if conn.execute("SELECT COUNT(*) FROM llm_channels").fetchone()[0] == 0:
+        row = conn.execute(
+            "SELECT provider, base_url, api_key_enc FROM agent_config WHERE id = 1").fetchone()
+        if row and row[2]:
+            cur = conn.execute(
+                "INSERT INTO llm_channels (name, provider, base_url, api_key_enc) "
+                "VALUES ('默认渠道', ?, ?, ?)", (row[0], row[1], row[2]))
+            conn.execute("UPDATE agent_config SET channel_id = ? WHERE id = 1",
+                         (cur.lastrowid,))
 
 
 def init_db(db_path: str) -> None:

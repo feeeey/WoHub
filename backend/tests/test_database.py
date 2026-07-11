@@ -113,4 +113,5 @@ def test_init_db_is_idempotent():
         # + 3 agent tables (outcome_checks, agent_runs, agent_decisions)
         # + 1 agent config table (agent_config)
         # + 5 chat tables (chat_sessions, chat_messages, chat_turns, chat_events, screener_semantics)
-        assert len(tables) == 18
+        # + 1 llm_channels table (llm_channels)
+        assert len(tables) == 19

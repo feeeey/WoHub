@@ -1,5 +1,4 @@
 import base64
-import dataclasses
 import sqlite3
 import requests
 from fastapi import APIRouter, HTTPException
@@ -14,9 +13,8 @@ router = APIRouter(prefix="/agent")
 
 
 class AgentConfigBody(BaseModel):
-    provider: Literal["openai", "anthropic"]
-    base_url: str = ""
-    api_key: Optional[str] = None          # None = 不改
+    channel_id: Optional[int] = None
+    vision_channel_id: Optional[int] = None
     model: str
     vision_model: str = ""
     max_tokens: int = Field(4096, ge=256, le=64000)
@@ -28,7 +26,9 @@ class AgentConfigBody(BaseModel):
 
 def _public(cfg) -> dict:
     d = cfg.__dict__.copy()
-    d["has_api_key"] = bool(d.pop("api_key"))
+    main = d.pop("main_channel")
+    d.pop("vision_channel")
+    d["has_api_key"] = bool(main and main.api_key)
     d["insecure_defaults"] = settings.insecure_defaults()   # 前端据此显示警告
     return d
 
@@ -96,38 +96,41 @@ _PROBE_PNG = base64.b64decode(
 
 
 class ProbeBody(BaseModel):
+    channel_id: Optional[int] = None
     provider: Optional[Literal["openai", "anthropic"]] = None
     base_url: Optional[str] = None
-    api_key: Optional[str] = None       # None = 用已存密钥
-    model: Optional[str] = None
-    vision_model: Optional[str] = None
+    api_key: Optional[str] = None
 
 
-def _merged_cfg(body: ProbeBody):
-    cfg = load_config()
-    return dataclasses.replace(
-        cfg,
-        provider=body.provider or cfg.provider,
-        base_url=cfg.base_url if body.base_url is None else body.base_url,
-        api_key=body.api_key or cfg.api_key,
-        model=body.model or cfg.model,
-        vision_model=cfg.vision_model if body.vision_model is None else body.vision_model)
+def _resolve_channel(body: ProbeBody) -> Channel:
+    """已存渠道为底 + inline 覆盖（支持渠道未保存先测）。"""
+    base = None
+    if body.channel_id:
+        base = get_channel(body.channel_id)
+        if base is None:
+            raise HTTPException(404, "渠道不存在")
+    return Channel(
+        id=base.id if base else 0,
+        name=base.name if base else "(未保存)",
+        provider=body.provider or (base.provider if base else "openai"),
+        base_url=(base.base_url if base else "") if body.base_url is None else body.base_url,
+        api_key=body.api_key or (base.api_key if base else None))
 
 
 @router.post("/models")
 def list_models(body: ProbeBody):
-    cfg = _merged_cfg(body)
-    if not cfg.api_key:
+    ch = _resolve_channel(body)
+    if not ch.api_key:
         raise HTTPException(400, "未配置 API Key")
     try:
-        if cfg.provider == "anthropic":
+        if ch.provider == "anthropic":
             r = requests.get("https://api.anthropic.com/v1/models",
-                             headers={"x-api-key": cfg.api_key,
+                             headers={"x-api-key": ch.api_key,
                                       "anthropic-version": "2023-06-01"}, timeout=15)
         else:
-            base = (cfg.base_url or "https://api.openai.com/v1").rstrip("/")
+            base = (ch.base_url or "https://api.openai.com/v1").rstrip("/")
             r = requests.get(f"{base}/models",
-                             headers={"Authorization": f"Bearer {cfg.api_key}"}, timeout=15)
+                             headers={"Authorization": f"Bearer {ch.api_key}"}, timeout=15)
         r.raise_for_status()
         ids = sorted(m["id"] for m in r.json().get("data", []) if m.get("id"))
         return {"models": ids}
@@ -135,39 +138,54 @@ def list_models(body: ProbeBody):
         raise HTTPException(502, f"模型列表获取失败: {e}")
 
 
-def _probe_text(cfg) -> dict:
-    """最小文本调用验证 key/model 可用。真网调用，仅由 /test 端点触发。"""
+def _probe_text(channel, model_name) -> dict:
+    """最小文本调用验证渠道×模型可用。真网调用，仅由 /test 端点触发。"""
     try:
         from pydantic_ai import Agent
-        agent = Agent(build_model(cfg), output_type=str)
+        agent = Agent(build_model(channel, model_name), output_type=str)
         # 思考型模型（如 deepseek-v4-pro）先消耗推理 token 再输出——
         # 预算必须容纳整段思考，太小会在产出任何文字前被截断
         agent.run_sync("回复一个字：好", model_settings={"max_tokens": 2048})
-        return {"ok": True}
+        return {"ok": True, "channel": channel.name}
     except Exception as e:
-        return {"ok": False, "error": str(e)[:300]}
+        return {"ok": False, "channel": channel.name, "error": str(e)[:300]}
 
 
-def _probe_vision(cfg) -> dict:
+def _probe_vision(channel, model_name) -> dict:
     try:
         from pydantic_ai import Agent, BinaryContent
-        agent = Agent(build_model(cfg, model_name=cfg.vision_model), output_type=str)
+        agent = Agent(build_model(channel, model_name), output_type=str)
         agent.run_sync(["图中是什么颜色？一词回答。",
                         BinaryContent(data=_PROBE_PNG, media_type="image/png")],
                        model_settings={"max_tokens": 2048})
-        return {"ok": True, "supports_image": True}
+        return {"ok": True, "channel": channel.name, "supports_image": True}
     except Exception as e:
-        return {"ok": False, "error": str(e)[:300]}
+        return {"ok": False, "channel": channel.name, "error": str(e)[:300]}
+
+
+class TestBody(BaseModel):
+    channel_id: Optional[int] = None
+    model: Optional[str] = None
+    vision_channel_id: Optional[int] = None
+    vision_model: Optional[str] = None
 
 
 @router.post("/test")
-def test_llm(body: ProbeBody):
-    cfg = _merged_cfg(body)
-    if not cfg.api_key:
-        raise HTTPException(400, "未配置 API Key")
-    out = {"main": _probe_text(cfg), "vision": None}
-    if cfg.vision_model:
-        out["vision"] = _probe_vision(cfg)
+def test_llm(body: TestBody):
+    cfg = load_config()
+    main_ch = get_channel(body.channel_id) if body.channel_id else cfg.main_channel
+    model = body.model or cfg.model
+    if main_ch is None or not main_ch.api_key:
+        raise HTTPException(400, "主渠道未配置或缺少 API Key")
+    out = {"main": _probe_text(main_ch, model), "vision": None}
+    vision_model = cfg.vision_model if body.vision_model is None else body.vision_model
+    if vision_model:
+        vch = get_channel(body.vision_channel_id) if body.vision_channel_id else main_ch
+        if vch is None or not vch.api_key:
+            out["vision"] = {"ok": False, "channel": "-",
+                             "error": "视觉渠道未配置或缺少 API Key"}
+        else:
+            out["vision"] = _probe_vision(vch, vision_model)
     return out
 
 

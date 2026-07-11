@@ -1,12 +1,12 @@
 import pytest
 from unittest.mock import patch
-from agent.config import save_config
+from tests.helpers import save_config_with_channel
 
 
 @pytest.mark.asyncio
-async def test_models_proxy_openai_compatible(client):
-    save_config({"provider": "openai", "base_url": "https://openrouter.ai/api/v1",
-                 "model": "m", "api_key": "sk-x", "enabled": False})
+async def test_models_via_stored_channel(client):
+    cid = save_config_with_channel(channel_base_url="https://openrouter.ai/api/v1",
+                                   channel_api_key="sk-x")
 
     class FakeResp:
         status_code = 200
@@ -16,38 +16,58 @@ async def test_models_proxy_openai_compatible(client):
 
     with patch("api.agent.requests.get", return_value=FakeResp()) as g:
         async with client as c:
-            r = (await c.post("/api/agent/models", json={})).json()
+            r = (await c.post("/api/agent/models", json={"channel_id": cid})).json()
     assert r["models"] == ["deepseek/deepseek-v4-pro", "google/gemini-3-pro"]
     assert g.call_args.args[0] == "https://openrouter.ai/api/v1/models"
 
 
 @pytest.mark.asyncio
-async def test_models_requires_key(client):
-    async with client as c:
-        r = await c.post("/api/agent/models", json={})
-    assert r.status_code == 400
+async def test_models_inline_overrides_without_saved_channel(client):
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"data": [{"id": "m1"}]}
+
+    with patch("api.agent.requests.get", return_value=FakeResp()) as g:
+        async with client as c:
+            r = await c.post("/api/agent/models", json={
+                "provider": "openai", "base_url": "https://x.example/v1", "api_key": "sk-t"})
+    assert r.json()["models"] == ["m1"]
+    assert g.call_args.args[0] == "https://x.example/v1/models"
 
 
 @pytest.mark.asyncio
-async def test_llm_test_endpoint_merges_overrides(client):
-    save_config({"provider": "openai", "model": "saved-m", "api_key": "k",
-                 "vision_model": "", "enabled": False})
+async def test_models_requires_key(client):
+    async with client as c:
+        assert (await c.post("/api/agent/models", json={})).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_llm_test_per_slot_channels(client):
+    from agent.config import save_channel, save_config
+    cid = save_config_with_channel(vision_model="")
+    vid = save_channel({"name": "视觉专用", "provider": "openai",
+                        "base_url": "", "api_key": "sk-v"})
     seen = {}
 
-    def fake_probe_text(cfg):
-        seen["model"] = cfg.model
-        return {"ok": True}
+    def fake_text(channel, model_name):
+        seen["text"] = (channel.id, model_name)
+        return {"ok": True, "channel": channel.name}
 
-    with patch("api.agent._probe_text", side_effect=fake_probe_text), \
-         patch("api.agent._probe_vision", return_value={"ok": True, "supports_image": True}) as pv:
+    def fake_vision(channel, model_name):
+        seen["vision"] = (channel.id, model_name)
+        return {"ok": True, "channel": channel.name, "supports_image": True}
+
+    with patch("api.agent._probe_text", side_effect=fake_text), \
+         patch("api.agent._probe_vision", side_effect=fake_vision):
         async with client as c:
-            r = (await c.post("/api/agent/test",
-                              json={"model": "override-m", "vision_model": "vm"})).json()
-            assert r["main"]["ok"] is True and seen["model"] == "override-m"
-            assert r["vision"]["supports_image"] is True
-            # 不传 vision_model 且配置为空 → vision 为 null
-            with patch("api.agent._probe_text", return_value={"ok": True}):
-                r2 = (await c.post("/api/agent/test", json={})).json()
+            r = (await c.post("/api/agent/test", json={
+                "model": "override-m", "vision_channel_id": vid,
+                "vision_model": "vm"})).json()
+            assert r["main"]["ok"] is True and seen["text"] == (cid, "override-m")
+            assert seen["vision"] == (vid, "vm") and r["vision"]["channel"] == "视觉专用"
+            # vision_model 显式空 且 配置为空 → vision 为 null
+            r2 = (await c.post("/api/agent/test", json={"vision_model": ""})).json()
             assert r2["vision"] is None
 
 

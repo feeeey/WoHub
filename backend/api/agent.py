@@ -1,10 +1,12 @@
 import base64
 import dataclasses
+import sqlite3
 import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
-from agent.config import load_config, save_config
+from agent.config import (load_config, save_config, Channel, list_channels,
+                          get_channel, save_channel, channel_in_use, delete_channel)
 from agent.llm import build_model
 from config import settings
 
@@ -40,6 +42,49 @@ def get_config():
 def put_config(body: AgentConfigBody):
     save_config(body.model_dump())
     return _public(load_config())
+
+
+# ---- LLM 渠道 CRUD ----
+
+class ChannelBody(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    provider: Literal["openai", "anthropic"] = "openai"
+    base_url: str = ""
+    api_key: Optional[str] = None      # None = 不改, "" = 清除
+
+
+@router.get("/channels")
+def get_channels():
+    return {"channels": list_channels()}
+
+
+@router.post("/channels")
+def create_channel(body: ChannelBody):
+    try:
+        return {"id": save_channel(body.model_dump())}
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "渠道名已存在")
+
+
+@router.put("/channels/{channel_id}")
+def update_channel(channel_id: int, body: ChannelBody):
+    if get_channel(channel_id) is None:
+        raise HTTPException(404, "渠道不存在")
+    try:
+        save_channel({**body.model_dump(), "id": channel_id})
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "渠道名已存在")
+    return {"id": channel_id}
+
+
+@router.delete("/channels/{channel_id}")
+def remove_channel(channel_id: int):
+    if get_channel(channel_id) is None:
+        raise HTTPException(404, "渠道不存在")
+    if channel_in_use(channel_id):
+        raise HTTPException(409, "渠道正被主模型或视觉槽位引用，请先切换槽位")
+    delete_channel(channel_id)
+    return {"ok": True}
 
 
 # ---- 连通性探测与模型列表（Phase 6）----

@@ -211,6 +211,62 @@
         {{ agentInsecureDefaults.join('、') }} 为默认值——密钥加密形同虚设；且轮换 SECRET_KEY 会作废已存密钥。
       </div>
 
+      <!-- LLM 渠道管理 -->
+      <div class="channel-card">
+        <div class="channel-head">
+          <strong>LLM 渠道</strong>
+          <button type="button" class="btn-inline" @click="startChannelEdit(null)">新增渠道</button>
+        </div>
+        <div v-if="!channels.length" class="picker-empty">尚无渠道，先新增一个（如 OpenRouter）</div>
+        <table v-else class="channel-table">
+          <thead><tr><th>名称</th><th>Provider</th><th>Base URL</th><th>Key</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="ch in channels" :key="ch.id">
+              <td>{{ ch.name }}</td>
+              <td>{{ ch.provider }}</td>
+              <td class="channel-url">{{ ch.base_url || '官方端点' }}</td>
+              <td>{{ ch.has_api_key ? '已配置' : '未配置' }}</td>
+              <td class="channel-ops">
+                <button type="button" class="btn-inline" @click="startChannelEdit(ch)">编辑</button>
+                <button type="button" class="btn-inline" @click="removeChannel(ch)">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div v-if="channelEdit" class="channel-editor">
+          <div class="form-row">
+            <div class="form-group">
+              <label>名称</label>
+              <input v-model="channelEdit.name" placeholder="例：OpenRouter" />
+            </div>
+            <div class="form-group">
+              <label>Provider</label>
+              <select v-model="channelEdit.provider">
+                <option value="openai">OpenAI 兼容端点</option>
+                <option value="anthropic">Anthropic</option>
+              </select>
+            </div>
+          </div>
+          <div v-if="channelEdit.provider === 'openai'" class="form-group">
+            <label>Base URL</label>
+            <input v-model="channelEdit.base_url" placeholder="https://.../v1，留空使用官方端点" />
+          </div>
+          <div class="form-group">
+            <label>API Key</label>
+            <input v-model="channelEdit.api_key" type="password" autocomplete="new-password"
+                   :placeholder="channelEdit.has_api_key ? '已保存（留空不修改）' : '请输入 API Key'" />
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary btn-sm" @click="saveChannel">保存渠道</button>
+            <button type="button" class="btn btn-sm" :disabled="channelTesting" @click="testChannel">
+              {{ channelTesting ? '测试中…' : '测试连通' }}</button>
+            <button type="button" class="btn btn-sm" @click="channelEdit = null">取消</button>
+            <span v-if="channelMsg" class="test-result">{{ channelMsg }}</span>
+          </div>
+        </div>
+      </div>
+
       <div class="form-row">
         <div class="form-group">
           <label>启用 Agent</label>
@@ -220,53 +276,36 @@
             <span>{{ agentForm.enabled ? '启用' : '禁用' }}</span>
           </label>
         </div>
-        <div class="form-group">
-          <label>Provider</label>
-          <select v-model="agentForm.provider">
-            <option value="openai">OpenAI 兼容端点</option>
-            <option value="anthropic">Anthropic</option>
-          </select>
-        </div>
-      </div>
-
-      <div v-if="agentForm.provider === 'openai'" class="form-group">
-        <label>Base URL</label>
-        <input
-          v-model="agentForm.base_url"
-          placeholder="https://.../v1，留空使用官方端点"
-        />
       </div>
 
       <div class="form-row">
         <div class="form-group">
+          <label>主模型渠道</label>
+          <select v-model="agentForm.channel_id">
+            <option :value="null">未选择</option>
+            <option v-for="ch in channels" :key="ch.id" :value="ch.id">{{ ch.name }}</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label>模型 <button type="button" class="btn-inline" @click="openModelPicker('model')">选择</button></label>
           <input v-model="agentForm.model"
                  placeholder="例：deepseek/deepseek-v4-pro（可手输或点「选择」浏览）" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>视觉渠道</label>
+          <select v-model="agentForm.vision_channel_id">
+            <option :value="null">跟随主渠道</option>
+            <option v-for="ch in channels" :key="ch.id" :value="ch.id">{{ ch.name }}</option>
+          </select>
         </div>
         <div class="form-group">
           <label>视觉模型（可选，识图/截图分析用）
             <button type="button" class="btn-inline" @click="openModelPicker('vision_model')">选择</button></label>
           <input v-model="agentForm.vision_model"
                  placeholder="留空 = 图片直传主模型（主模型须多模态）" />
-        </div>
-        <div class="form-group">
-          <label>API Key</label>
-          <div class="api-key-row">
-            <input
-              v-model="agentApiKeyInput"
-              type="password"
-              autocomplete="new-password"
-              :placeholder="agentHasApiKey ? '已保存（留空不修改）' : '请输入 API Key'"
-              class="api-key-input"
-            />
-            <button
-              v-if="agentHasApiKey"
-              class="btn btn-sm btn-danger-outline"
-              @click="clearAgentApiKey"
-              title="清除已存密钥"
-            >清除</button>
-          </div>
-          <div v-if="agentApiKeyClearedFlag" class="key-clear-hint">提交后将清除已存密钥</div>
         </div>
       </div>
 
@@ -323,9 +362,9 @@
           {{ testing ? '测试中…' : '测试连接' }}
         </button>
         <span v-if="testResult" class="test-result">
-          主模型 {{ testResult.main.ok ? '✅' : '❌ ' + testResult.main.error }}
+          主模型 {{ testResult.main.channel ? '[' + testResult.main.channel + '] ' : '' }}{{ testResult.main.ok ? '✅' : '❌ ' + testResult.main.error }}
           <template v-if="testResult.vision">
-            ｜视觉 {{ testResult.vision.ok ? '✅ 支持图像' : '❌ ' + testResult.vision.error }}
+            ｜视觉 {{ testResult.vision.channel ? '[' + testResult.vision.channel + '] ' : '' }}{{ testResult.vision.ok ? '✅ 支持图像' : '❌ ' + testResult.vision.error }}
           </template>
         </span>
       </div>
@@ -600,8 +639,8 @@ async function saveProxy(enabled) {
 // ---- Agent configuration ----
 const agentForm = ref({
   enabled: false,
-  provider: 'openai',
-  base_url: '',
+  channel_id: null,
+  vision_channel_id: null,
   model: '',
   vision_model: '',
   max_tokens: 4096,
@@ -609,9 +648,6 @@ const agentForm = ref({
   deep_dive_limit: 5,
   credential_id: null,
 })
-const agentHasApiKey = ref(false)
-const agentApiKeyInput = ref('')
-const agentApiKeyClearedFlag = ref(false)
 const agentInsecureDefaults = ref([])
 const agentMsg = ref('')
 const agentOk = ref(false)
@@ -622,12 +658,11 @@ const testResult = ref(null)
 async function loadAgentConfig() {
   try {
     const r = await api.getAgentConfig()
-    agentHasApiKey.value = r.has_api_key || false
     agentInsecureDefaults.value = r.insecure_defaults || []
     agentForm.value = {
       enabled: r.enabled ?? false,
-      provider: r.provider || 'openai',
-      base_url: r.base_url || '',
+      channel_id: r.channel_id ?? null,
+      vision_channel_id: r.vision_channel_id ?? null,
       model: r.model || '',
       vision_model: r.vision_model || '',
       max_tokens: r.max_tokens ?? 4096,
@@ -638,40 +673,76 @@ async function loadAgentConfig() {
   } catch {}
 }
 
-function clearAgentApiKey() {
-  agentApiKeyInput.value = ''
-  agentApiKeyClearedFlag.value = true
-}
-
 async function saveAgentConfig() {
   agentMsg.value = ''
   try {
-    // api_key: null = 不修改；"" = 显式清除；字符串 = 更新
-    let api_key = null
-    if (agentApiKeyClearedFlag.value) {
-      api_key = ''
-    } else if (agentApiKeyInput.value.trim()) {
-      api_key = agentApiKeyInput.value.trim()
-    }
-    const payload = { ...agentForm.value, api_key }
-    const r = await api.updateAgentConfig(payload)
-    agentHasApiKey.value = r.has_api_key || false
+    const r = await api.updateAgentConfig({ ...agentForm.value })
     agentInsecureDefaults.value = r.insecure_defaults || []
     agentMsg.value = '保存成功'
     agentOk.value = true
-    agentApiKeyInput.value = ''
-    agentApiKeyClearedFlag.value = false
   } catch (e) {
     agentMsg.value = e.message || '保存失败'
     agentOk.value = false
   }
 }
 
-function agentOverrides() {
-  const o = { provider: agentForm.value.provider, base_url: agentForm.value.base_url,
-              model: agentForm.value.model, vision_model: agentForm.value.vision_model }
-  if (agentApiKeyInput.value.trim()) o.api_key = agentApiKeyInput.value.trim()
-  return o
+function testOverrides() {
+  return { channel_id: agentForm.value.channel_id,
+           model: agentForm.value.model,
+           vision_channel_id: agentForm.value.vision_channel_id,
+           vision_model: agentForm.value.vision_model }
+}
+
+// ---- LLM 渠道管理 ----
+const channels = ref([])
+const channelEdit = ref(null)   // null | {id?, name, provider, base_url, api_key, has_api_key}
+const channelMsg = ref('')
+const channelTesting = ref(false)
+
+async function loadChannels() {
+  try { channels.value = (await api.listLlmChannels()).channels } catch {}
+}
+
+function startChannelEdit(ch) {
+  channelMsg.value = ''
+  channelEdit.value = ch
+    ? { id: ch.id, name: ch.name, provider: ch.provider, base_url: ch.base_url,
+        api_key: '', has_api_key: ch.has_api_key }
+    : { name: '', provider: 'openai', base_url: '', api_key: '', has_api_key: false }
+}
+
+async function saveChannel() {
+  const e = channelEdit.value
+  const payload = { name: e.name.trim(), provider: e.provider, base_url: e.base_url,
+                    api_key: e.api_key.trim() || null }   // 空输入 = 不改已存 key
+  try {
+    if (e.id) await api.updateLlmChannel(e.id, payload)
+    else await api.createLlmChannel(payload)
+    channelEdit.value = null
+    await loadChannels()
+  } catch (err) { channelMsg.value = '保存失败：' + err.message }
+}
+
+async function removeChannel(ch) {
+  if (!confirm(`删除渠道「${ch.name}」？`)) return
+  try { await api.deleteLlmChannel(ch.id); await loadChannels() }
+  catch (err) { alert('删除失败：' + err.message) }
+}
+
+async function testChannel() {
+  const e = channelEdit.value
+  channelTesting.value = true
+  channelMsg.value = ''
+  try {
+    const body = { channel_id: e.id || null, provider: e.provider, base_url: e.base_url }
+    if (e.api_key.trim()) body.api_key = e.api_key.trim()
+    const r = await api.fetchAgentModels(body)
+    channelMsg.value = `✅ 连通（${r.models.length} 个模型）`
+  } catch (err) {
+    channelMsg.value = '❌ ' + err.message
+  } finally {
+    channelTesting.value = false
+  }
 }
 
 const modelPickerFor = ref(null)          // null | 'model' | 'vision_model'
@@ -688,7 +759,7 @@ const filteredModels = computed(() => {
 async function openModelPicker(field) {
   modelPickerFor.value = field
   modelFilter.value = ''
-  if (!modelList.value.length) await loadModels()
+  await loadModels()
 }
 
 function pickModel(m) {
@@ -697,10 +768,13 @@ function pickModel(m) {
 }
 
 async function loadModels() {
+  const cid = modelPickerFor.value === 'vision_model'
+    ? (agentForm.value.vision_channel_id || agentForm.value.channel_id)
+    : agentForm.value.channel_id
   pickerLoading.value = true
   pickerError.value = ''
   try {
-    modelList.value = (await api.fetchAgentModels(agentOverrides())).models
+    modelList.value = (await api.fetchAgentModels({ channel_id: cid })).models
   } catch (e) {
     pickerError.value = '模型列表获取失败：' + e.message
   } finally {
@@ -711,7 +785,7 @@ async function loadModels() {
 async function testLlm() {
   testing.value = true
   testResult.value = null
-  try { testResult.value = await api.testAgentLlm(agentOverrides()) }
+  try { testResult.value = await api.testAgentLlm(testOverrides()) }
   catch (e) { testResult.value = { main: { ok: false, error: e.message }, vision: null } }
   finally { testing.value = false }
 }
@@ -752,6 +826,7 @@ onMounted(() => {
   loadProxy()
   loadTradingCreds()
   loadAgentConfig()
+  loadChannels()
   loadSemantics()
   loadLogs()
 })
@@ -1101,4 +1176,17 @@ onMounted(() => {
 .sem-bias { margin-left: auto; font-size: 12px; opacity: .7; }
 .sem-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 6px; }
 .sem-body label { display: flex; flex-direction: column; font-size: 12.5px; gap: 2px; }
+
+/* ---- LLM channel management ---- */
+.channel-card { border: 1px solid var(--border, #ddd); border-radius: 8px;
+  padding: 12px; margin-bottom: 16px; }
+.channel-head { display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 8px; }
+.channel-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.channel-table th, .channel-table td { text-align: left; padding: 4px 8px;
+  border-bottom: 1px solid var(--border, #eee); }
+.channel-url { font-family: monospace; font-size: 12px; word-break: break-all; }
+.channel-ops { white-space: nowrap; }
+.channel-editor { margin-top: 12px; padding-top: 12px;
+  border-top: 1px dashed var(--border, #ddd); }
 </style>

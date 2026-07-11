@@ -280,6 +280,22 @@ export const api = {
     return request('/agent/config', { method: 'PUT', body: JSON.stringify(data) })
   },
 
+  async listLlmChannels() {
+    return request('/agent/channels')
+  },
+
+  async createLlmChannel(data) {
+    return request('/agent/channels', { method: 'POST', body: JSON.stringify(data) })
+  },
+
+  async updateLlmChannel(id, data) {
+    return request(`/agent/channels/${id}`, { method: 'PUT', body: JSON.stringify(data) })
+  },
+
+  async deleteLlmChannel(id) {
+    return request(`/agent/channels/${id}`, { method: 'DELETE' })
+  },
+
   // ---- chat ----
 
   async listChatSessions() {

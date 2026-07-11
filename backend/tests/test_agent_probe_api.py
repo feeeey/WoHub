@@ -84,3 +84,12 @@ async def test_semantics_get_seeds_and_put_updates(client):
         assert target["bias"] == "long（改）"
         assert (await c.put("/api/agent/semantics/not/exists",
                             json={"bias": "x"})).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_models_empty_api_key_overrides_stored_key(client):
+    """显式 api_key="" 覆盖已存 key → 解析出无 key 渠道 → 400,而非静默用回存储 key。"""
+    cid = save_config_with_channel(channel_api_key="sk-real")
+    async with client as c:
+        r = await c.post("/api/agent/models", json={"channel_id": cid, "api_key": ""})
+    assert r.status_code == 400

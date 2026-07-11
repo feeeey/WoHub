@@ -114,7 +114,7 @@ def _resolve_channel(body: ProbeBody) -> Channel:
         name=base.name if base else "(未保存)",
         provider=body.provider or (base.provider if base else "openai"),
         base_url=(base.base_url if base else "") if body.base_url is None else body.base_url,
-        api_key=body.api_key or (base.api_key if base else None))
+        api_key=(base.api_key if base else None) if body.api_key is None else body.api_key)
 
 
 @router.post("/models")

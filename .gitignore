@@ -36,4 +36,5 @@ Thumbs.db
 # Pytest
 .pytest_cache/
 backend/.pytest_tmp/
+.coverage
 .superpowers/

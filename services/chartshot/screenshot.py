@@ -6,6 +6,7 @@ from playwright.sync_api import sync_playwright, Page
 from config import (
     OUTPUT_DIR, CHART_LAYOUT_ID, TIMEFRAME_MAP,
     SYMBOL_EXCHANGE_MAP, MAX_RETRIES, RETRY_BACKOFF,
+    INDICATOR_WAIT_TIMEOUT, PER_TF_BUDGET, NAV_TIMEOUT,
 )
 from cookies_manager import load_cookies, load_headers
 
@@ -51,7 +52,7 @@ def _has_calculation_timeout(page):
     }""")
 
 
-def wait_for_indicators_ready(page, timeout=60):
+def wait_for_indicators_ready(page, timeout=INDICATOR_WAIT_TIMEOUT):
     time.sleep(2)
     start = time.time()
     stable_count = 0
@@ -135,25 +136,34 @@ def capture_chart(symbol, timeframes, headless=True):
         )
         context.add_cookies(cookies)
 
-        pages = {}
+        # 严格串行：一次只开一个图表页，截完立刻关。
+        # 曾经是先并行 goto 所有周期再逐个等——N 个 TradingView 页面同时算 Pine 指标
+        # 会互相抢 CPU，spinner 一直不消失，每个周期都熬满预算。单周期 ~10s 的活
+        # 三周期能拖到 5 分钟以上。串行反而快得多，内存占用也恒定。
         for tf in valid_tfs:
-            url = build_chart_url(symbol, tf)
+            deadline = time.time() + PER_TF_BUDGET
             page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded")
-            pages[tf] = page
-
-        for tf, page in pages.items():
-            for attempt in range(MAX_RETRIES):
-                ready = wait_for_indicators_ready(page)
-                if ready:
-                    break
-                if attempt < MAX_RETRIES - 1:
-                    backoff = RETRY_BACKOFF[attempt]
-                    print(f"[{symbol}|{tf}] Retry {attempt + 1}, waiting {backoff}s")
-                    time.sleep(backoff)
-                    page.reload(wait_until="domcontentloaded")
-
             try:
+                page.goto(build_chart_url(symbol, tf), wait_until="domcontentloaded",
+                          timeout=NAV_TIMEOUT * 1000)
+
+                for attempt in range(MAX_RETRIES):
+                    remaining = deadline - time.time()
+                    if remaining <= 5:
+                        print(f"[{symbol}|{tf}] 预算耗尽，用当前画面截图（指标可能未算完）")
+                        break
+                    ready = wait_for_indicators_ready(
+                        page, timeout=min(INDICATOR_WAIT_TIMEOUT, remaining))
+                    if ready:
+                        break
+                    if attempt < MAX_RETRIES - 1:
+                        backoff = RETRY_BACKOFF[attempt]
+                        print(f"[{symbol}|{tf}] Retry {attempt + 1}, waiting {backoff}s "
+                              f"(剩余预算 {int(deadline - time.time())}s)")
+                        time.sleep(backoff)
+                        page.reload(wait_until="domcontentloaded",
+                                    timeout=NAV_TIMEOUT * 1000)
+
                 ts = time.strftime("%Y%m%d_%H%M%S")
                 tmp_name = f"_tmp_{os.getpid()}_{uuid.uuid4().hex[:8]}.png"
                 tmp_path = Path(OUTPUT_DIR) / tmp_name
@@ -163,8 +173,12 @@ def capture_chart(symbol, timeframes, headless=True):
                 final_path = Path(OUTPUT_DIR) / final_name
                 tmp_path.rename(final_path)
                 results.append(str(final_path))
+                print(f"[{symbol}|{tf}] OK ({int(time.time() - (deadline - PER_TF_BUDGET))}s)")
             except Exception as e:
+                # 单周期失败不影响其余周期
                 print(f"[{symbol}|{tf}] Screenshot failed: {e}")
+            finally:
+                page.close()
 
         context.close()
         browser.close()

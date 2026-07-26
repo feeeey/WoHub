@@ -27,9 +27,15 @@ services:
       args:
         - PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.org/simple}
     shm_size: 2gb
+    # PID 1 是 python，不会回收 Chromium 退出后的子进程 —— 观察到过 defunct
+    # headless_shell 堆积。init 进程负责收尸。
+    init: true
     volumes:
       - ./data/screenshots:/app/output
       - ./data/cookies:/app/cookies
     environment:
       - TZ=Asia/Shanghai
+      # 不设的话 worker 的 print（排队深度、重试、每周期失败原因）全被 stdout 缓冲吃掉，
+      # docker logs 里只剩 werkzeug 的访问日志，截图失败时无从排查
+      - PYTHONUNBUFFERED=1
     restart: unless-stopped

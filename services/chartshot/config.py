@@ -22,3 +22,16 @@ SYMBOL_EXCHANGE_MAP = {
 
 MAX_RETRIES = 3
 RETRY_BACKOFF = [3, 5, 8]
+
+# --- 超时预算 ---
+# 三层超时必须逐层放大，否则外层先断、内层还在空转，把单 worker 队列堵死：
+#   backend requests timeout  >  HTTP 等待(下面两个常量算出)  >  worker 单周期预算
+# 指标等待单次上限。重试之间会被 PER_TF_BUDGET 截断，不会真的跑满 3 次。
+INDICATOR_WAIT_TIMEOUT = 60
+# 单个周期的总预算（指标等待+重试+截图下载）。预算耗尽就用当前画面截图——
+# 指标没算完的图也比没有强，且能保证最坏耗时可控。
+PER_TF_BUDGET = 100
+# 浏览器启动的固定开销
+CAPTURE_BASE_OVERHEAD = 30
+# 单页导航超时
+NAV_TIMEOUT = 45

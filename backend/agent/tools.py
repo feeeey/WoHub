@@ -117,6 +117,23 @@ def signal_history(symbol: str, indicator: str, limit: int = 30) -> dict:
     return out
 
 
+def screener_outcome_stats(days: int = 90) -> dict:
+    """全部筛选器 label 的后验统计（方向盲原始收益，1h/4h/24h）。
+    回答「哪个筛选器最近真的有预测力」这类问题的数据源。"""
+    try:
+        days = max(7, min(int(days), 365))
+    except (TypeError, ValueError):
+        return {"error": f"days 必须是数字，收到 {days!r}"}
+    from agent.outcome_stats import get_stats
+    try:
+        stats = get_stats(days)
+    except Exception as e:
+        return {"error": f"后验统计查询失败: {e}"}
+    return {"window_days": days, "stats": stats,
+            "note": "up_rate 是方向盲的原始上涨占比，不是按信号方向交易的胜率；"
+                    "做空类信号看下跌占比（1-up_rate）。样本不足的视界值为 null。"}
+
+
 def position_plan_preview(symbol: str, interval: str, direction: str, credential_id: int) -> dict:
     """只读仓位规划预览（需要专用凭据拉 equity/exchangeInfo，Places NO order）。
     仅当 agent_config.credential_id 已配置时注册为 agent 工具。"""

@@ -138,6 +138,13 @@ def _build_agent(cfg, model) -> Agent:
                      lambda: T.signal_history(symbol, indicator))
 
     @agent.tool
+    def get_screener_stats(ctx: RunContext[ChatDeps], days: int = 90) -> dict:
+        """全部筛选器的后验统计（1h/4h/24h 上涨占比与均值，方向盲）。
+        回答『哪个筛选器最近靠谱』『底背离信号最近表现如何』用这个。"""
+        return _tool(ctx, "screener_stats", {"days": days},
+                     lambda: T.screener_outcome_stats(days))
+
+    @agent.tool
     def list_watchlists(ctx: RunContext[ChatDeps]) -> dict:
         """TradingView 关注列表（跑筛选扫描前先用这个拿 watchlist_id）。"""
         return _tool(ctx, "list_watchlists", {}, T.list_watchlists)

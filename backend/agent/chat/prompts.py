@@ -24,11 +24,25 @@ def _semantics_block() -> str:
     rows = get_all()
     if not rows:
         return ""
-    lines = ["\n【筛选器语义档案】（这些是本系统内置 Pine 筛选器的含义，跑扫描前先对照）"]
+    # 后验统计注入：语义档案从「静态人写的经验」升级为「带数据的可核陈述」。
+    # 统计失败不影响档案本身（闭环是增强，不是依赖）。
+    stats = {}
+    try:
+        from agent.outcome_stats import get_stats, format_stats_line
+        stats = get_stats()
+    except Exception:
+        format_stats_line = None
+    lines = ["\n【筛选器语义档案】（这些是本系统内置 Pine 筛选器的含义，跑扫描前先对照。"
+             "附带的后验统计是方向盲原始收益——上涨占比不是按信号方向交易的胜率，"
+             "做空类信号应关注下跌占比；引用时须连同样本量一起给出）"]
     for r in rows:
         lines.append(f"- {r['label']}（key={r['key']}）：{r['meaning']}"
                      f" 方向：{r['bias']}。用法：{r['usage']}"
                      f" 局限：{r['caveats']} 建议叠加：{r['combos']}")
+        if stats and format_stats_line:
+            sl = format_stats_line(r["label"], stats)
+            if sl:
+                lines.append(f"  ↳ {sl}")
     return "\n".join(lines)
 
 

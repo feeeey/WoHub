@@ -1,7 +1,8 @@
 import os
 import uuid
 from flask import Flask, jsonify, request, send_file
-from config import HOST, PORT, OUTPUT_DIR, VALID_TIMEFRAMES
+from config import (HOST, PORT, OUTPUT_DIR, VALID_TIMEFRAMES,
+                    PER_TF_BUDGET, CAPTURE_BASE_OVERHEAD)
 from worker import CaptureWorker, CaptureJob
 from cookies_manager import (
     get_raw_cookie_string,
@@ -15,7 +16,7 @@ worker = CaptureWorker()
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "service": "chartshot"})
+    return jsonify({"status": "ok", "service": "chartshot", **worker.stats()})
 
 
 @app.route("/api/screenshot", methods=["POST"])
@@ -40,12 +41,21 @@ def screenshot():
         symbol=symbol,
         timeframes=timeframes,
         job_id=uuid.uuid4().hex[:8],
+        source=(data.get("source") or "manual"),
     )
-    worker.submit(job)
+    if not worker.submit(job):
+        # 定时任务优先：手动截图不排它后面干等，立即让调用方知道
+        return jsonify({"ok": False, "busy": True,
+                        "error": "定时任务截图进行中，请稍后再试"}), 409
 
-    done = job.done_event.wait(timeout=120)
+    # 周期是串行渲染的，等待时间必须随周期数增长。
+    # 固定 120s 时选 3 个周期几乎必然超时，而 worker 还会继续跑完，堵住后面的请求。
+    wait_budget = CAPTURE_BASE_OVERHEAD + PER_TF_BUDGET * len(timeframes)
+    done = job.done_event.wait(timeout=wait_budget)
     if not done:
-        return jsonify({"ok": False, "error": "Timeout waiting for screenshot"}), 504
+        return jsonify({"ok": False,
+                        "error": f"Timeout waiting for screenshot (>{wait_budget}s, "
+                                 f"{len(timeframes)} 个周期)"}), 504
 
     if job.error:
         return jsonify({"ok": False, "error": job.error}), 500

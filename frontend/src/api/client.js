@@ -390,6 +390,15 @@ export const api = {
     return request('/agent/test', { method: 'POST', body: JSON.stringify(overrides) })
   },
 
+  // ---- agent 长期记忆 ----
+  async getAgentMemories() {
+    return request('/agent/memories')
+  },
+
+  async deleteAgentMemory(id) {
+    return request(`/agent/memories/${id}`, { method: 'DELETE' })
+  },
+
   // ---- agent 行为评测 ----
   async startLiveEval() {
     return request('/evals/live', { method: 'POST' })

@@ -117,6 +117,18 @@ def signal_history(symbol: str, indicator: str, limit: int = 30) -> dict:
     return out
 
 
+def save_memory(content: str, category: str = "preference") -> dict:
+    """写入跨会话长期记忆（用户偏好/稳定事实）。本地 DB 操作，不节流。"""
+    from agent.memory import save_memory as _save
+    return _save(content, category)
+
+
+def forget_memory(memory_id) -> dict:
+    """删除一条长期记忆。"""
+    from agent.memory import forget_memory as _forget
+    return _forget(memory_id)
+
+
 def screener_outcome_stats(days: int = 90) -> dict:
     """全部筛选器 label 的后验统计（方向盲原始收益，1h/4h/24h）。
     回答「哪个筛选器最近真的有预测力」这类问题的数据源。"""

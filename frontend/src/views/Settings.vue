@@ -462,6 +462,31 @@
       </div>
     </div>
 
+    <!-- Agent Long-term Memory -->
+    <div class="card section">
+      <div class="section-header">
+        <h3 class="section-title">Agent 长期记忆</h3>
+        <span class="badge">{{ memories.length }} / {{ memoryMax }}</span>
+      </div>
+      <p class="section-desc">
+        对话中用户明确表达的稳定偏好与事实，agent 自动写入、跨会话生效（注入 system prompt）。
+        这里只做查看与清理；写入由对话里的 remember 工具完成。
+      </p>
+      <table v-if="memories.length" class="eval-table">
+        <thead><tr><th>#</th><th>类型</th><th>内容</th><th>时间</th><th></th></tr></thead>
+        <tbody>
+          <tr v-for="m in memories" :key="m.id">
+            <td>{{ m.id }}</td>
+            <td>{{ m.category === 'preference' ? '偏好' : '事实' }}</td>
+            <td>{{ m.content }}</td>
+            <td class="eval-time">{{ m.created_at }}</td>
+            <td><button class="btn-inline danger" @click="removeMemory(m)">删</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="section-desc">还没有长期记忆。在对话里说「记住：……」试试。</p>
+    </div>
+
     <!-- Agent Behaviour Evals -->
     <div class="card section">
       <div class="section-header">
@@ -1049,6 +1074,30 @@ async function testChannel() {
   }
 }
 
+// ---- Agent 长期记忆 ----
+const memories = ref([])
+const memoryMax = ref(50)
+
+async function loadMemories() {
+  try {
+    const res = await api.getAgentMemories()
+    memories.value = res.memories || []
+    memoryMax.value = res.max || 50
+  } catch {
+    memories.value = []
+  }
+}
+
+async function removeMemory(m) {
+  if (!confirm(`删除记忆 #${m.id}「${m.content.slice(0, 30)}…」？`)) return
+  try {
+    await api.deleteAgentMemory(m.id)
+    await loadMemories()
+  } catch (e) {
+    evalMsg.value = e.message; evalOk.value = false
+  }
+}
+
 // ---- Agent 行为评测 ----
 const evalRuns = ref([])
 const evalActive = ref(null)      // 正在轮询的 run id
@@ -1261,6 +1310,7 @@ onMounted(() => {
   loadAgentConfig()
   loadChannels()
   loadSemantics()
+  loadMemories()
   loadEvalRuns()
   loadLogs()
 })

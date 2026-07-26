@@ -213,3 +213,21 @@ def put_semantics(folder: str, name: str, body: SemanticsBody):
     if not upsert(f"{folder}/{name}", body.model_dump()):
         raise HTTPException(404, "未知筛选器 key")
     return {"ok": True}
+
+
+# ---- 长期记忆管理（写入走 chat 工具，这里只有查看/删除）----
+
+@router.get("/memories")
+def get_memories():
+    from agent.memory import list_memories, MAX_MEMORIES
+    rows = list_memories()
+    return {"memories": rows, "count": len(rows), "max": MAX_MEMORIES}
+
+
+@router.delete("/memories/{memory_id}")
+def delete_memory(memory_id: int):
+    from agent.memory import forget_memory
+    out = forget_memory(memory_id)
+    if out.get("error"):
+        raise HTTPException(404, out["error"])
+    return out

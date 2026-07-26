@@ -137,7 +137,18 @@ def _capture_chart(symbol, interval):
     return {"files": [f"{symbol}_{interval}_eval.png"]}
 
 
+def _save_memory(content, category="preference"):
+    # 评测不污染真实记忆库：假装写入成功
+    return {"id": 999}
+
+
+def _forget_memory(memory_id):
+    return {"ok": True, "deleted": memory_id}
+
+
 _PATCHES = {
+    "save_memory": _save_memory,
+    "forget_memory": _forget_memory,
     "market_snapshot": _snapshot,
     "market_overview": _overview,
     "get_klines": _klines,

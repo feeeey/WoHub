@@ -59,6 +59,27 @@ def delete_session(session_id: int) -> None:
         db.close()
 
 
+def get_session(session_id: int) -> dict | None:
+    db = _db()
+    try:
+        row = db.execute("SELECT * FROM chat_sessions WHERE id = ?",
+                         (session_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        db.close()
+
+
+def update_session_summary(session_id: int, summary: str, upto_id: int) -> None:
+    """写入早期对话摘要与覆盖游标（增量压缩用）。"""
+    db = _db()
+    try:
+        db.execute("UPDATE chat_sessions SET summary = ?, summary_upto = ? WHERE id = ?",
+                   (summary[:4000], upto_id, session_id))
+        db.commit()
+    finally:
+        db.close()
+
+
 def touch_session(session_id: int) -> None:
     db = _db()
     try:

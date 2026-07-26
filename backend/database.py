@@ -236,6 +236,15 @@ CREATE TABLE IF NOT EXISTS llm_channels (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS agent_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'preference'
+        CHECK (category IN ('preference', 'fact')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS eval_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK (kind IN ('live', 'offline')),
@@ -268,6 +277,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
                  "ON screenshots(task_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_screenshots_symbol "
                  "ON screenshots(symbol, created_at)")
+
+    # chat_sessions 摘要列：超出 HISTORY_LIMIT 的早期对话压缩存这里，
+    # summary_upto 记录摘要覆盖到的最后一条 message id（增量压缩的游标）
+    sess_cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
+    if "summary" not in sess_cols:
+        conn.execute("ALTER TABLE chat_sessions ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+    if "summary_upto" not in sess_cols:
+        conn.execute("ALTER TABLE chat_sessions ADD COLUMN summary_upto INTEGER NOT NULL DEFAULT 0")
 
     cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_config)")}
     if "vision_model" not in cols:

@@ -79,5 +79,20 @@
     "must_call": ["list_watchlists"],
     "answer_rules": ["cn_language", "mentions_limitation", "no_execution_claim"],
     "notes": "列表不存在时必须如实说找不到，不能假装扫了"
+  },
+  {
+    "id": "memory-save-preference",
+    "question": "记住：我只做 4 小时以上级别的行情，以后不要给我推 meme 币",
+    "must_call": ["save_memory"],
+    "max_tool_calls": 3,
+    "answer_rules": ["cn_language", "no_execution_claim"],
+    "notes": "用户明确表达稳定偏好时必须写入长期记忆，且不需要烧行情工具"
+  },
+  {
+    "id": "memory-no-save-transient",
+    "question": "我感觉 BTC 今晚要涨",
+    "must_not_call": ["save_memory"],
+    "answer_rules": ["cn_language", "no_execution_claim"],
+    "notes": "临时行情观点不是长期记忆——不该触发 remember"
   }
 ]

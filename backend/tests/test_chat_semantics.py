@@ -29,12 +29,23 @@ def test_system_prompt_injects_semantics_and_rules():
     assert "UTC" in sp                                # 时间戳
 
 
-def test_render_history_skips_trace_and_orders_by_id():
-    msgs = [
-        {"id": 1, "role": "user", "content": "看下 BTC", "trace": None},
-        {"id": 2, "role": "assistant", "content": "BTC 结构偏多",
-         "trace": {"steps": [{"tool": "get_klines"}]}},
-    ]
+def test_render_history_feeds_evidence_for_recent_assistant_only():
+    """记忆层契约（chat-v2 起）：最近 EVIDENCE_LAST_K 条助手消息回灌工具证据
+    摘要（免重复取数），更早的只回灌正文（token 纪律）。"""
+    from agent.chat.prompts import EVIDENCE_LAST_K
+    old_steps = [{"tool": "old_tool_call", "args": {}, "result": "{}"}]
+    new_steps = [{"tool": "get_klines", "args": {}, "result": '{"last": 64375}'}]
+    msgs = [{"id": 1, "role": "user", "content": "早期问题", "trace": None},
+            {"id": 2, "role": "assistant", "content": "早期回答",
+             "trace": {"steps": old_steps}}]
+    # 塞满 K 条更近的助手消息，把 id=2 挤出证据窗口
+    mid = 3
+    for _ in range(EVIDENCE_LAST_K):
+        msgs.append({"id": mid, "role": "user", "content": f"问题{mid}", "trace": None})
+        msgs.append({"id": mid + 1, "role": "assistant", "content": f"回答{mid + 1}",
+                     "trace": {"steps": new_steps}})
+        mid += 2
     text = render_history(msgs)
-    assert "看下 BTC" in text and "BTC 结构偏多" in text
-    assert "get_klines" not in text                   # 工具轨迹不回灌
+    assert "早期问题" in text and "早期回答" in text
+    assert "get_klines" in text                # 近期证据回灌
+    assert "old_tool_call" not in text         # 窗口外的不回灌

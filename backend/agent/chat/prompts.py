@@ -23,6 +23,9 @@ _BASE = """你是 WoHub 的加密永续合约技术分析助手，在网页对�
   同一轮内不要以相同参数重复调用任何工具（结果不会变）；
   证据够了就作答——"再确认一遍"式的追加调用只烧配额不改结论。
   简单对比/读数类问题通常 2~4 次调用足够。
+- 长期记忆：用户明确表达稳定偏好或纠正你的长期性认知时（如「我只做4h以上」
+  「别再推荐meme币」），用 remember 存下来；过时了用 forget 删。
+  只存长期有效的结论，临时行情观点/单次问题不要存。
 - 回答用中文，结论先行，给出可复核的数值证据。"""
 
 
@@ -53,17 +56,52 @@ def _semantics_block() -> str:
     return "\n".join(lines)
 
 
+def _memory_block() -> str:
+    from agent.memory import render_block
+    try:
+        return render_block()
+    except Exception:
+        return ""   # 记忆读取失败不阻塞对话
+
+
 def build_system_prompt() -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    return f"{_BASE}\n{_semantics_block()}\n\n当前时间：{now}"
+    return f"{_BASE}\n{_memory_block()}\n{_semantics_block()}\n\n当前时间：{now}"
+
+
+# 证据回灌：只给最近 K 条助手消息附工具证据摘要，且逐条截断——
+# 解决「刚才那个结构你再看看」要重新调工具的问题，同时不放开 token 闸门
+EVIDENCE_LAST_K = 2
+EVIDENCE_MAX_STEPS = 3
+EVIDENCE_RESULT_CHARS = 110
+
+
+def _evidence_line(m: dict) -> str | None:
+    steps = [s for s in ((m.get("trace") or {}).get("steps") or []) if s.get("tool")]
+    if not steps:
+        return None
+    parts = []
+    for s in steps[:EVIDENCE_MAX_STEPS]:
+        args = str(s.get("args") or {})[:60]
+        result = (s.get("result") or "")[:EVIDENCE_RESULT_CHARS]
+        parts.append(f"{s['tool']}{args}→{result}")
+    more = f"（另 {len(steps) - EVIDENCE_MAX_STEPS} 步略）" if len(steps) > EVIDENCE_MAX_STEPS else ""
+    return "  （本轮已取证据：" + "；".join(parts) + more + "）"
 
 
 def render_history(messages: list[dict]) -> str:
-    """最近历史的纯文本渲染：只回灌正文，不回灌工具轨迹（token 纪律）。"""
+    """最近历史的纯文本渲染。正文全量回灌；工具证据只给最近
+    EVIDENCE_LAST_K 条助手消息附摘要（token 纪律 vs 免重复取数的折中）。"""
+    assistant_ids = [m["id"] for m in messages if m["role"] == "assistant"]
+    evidence_ids = set(assistant_ids[-EVIDENCE_LAST_K:])
     lines = []
     for m in messages:
         who = "用户" if m["role"] == "user" else "助手"
         content = (m.get("content") or "").strip()
         if content:
             lines.append(f"{who}：{content}")
+        if m["id"] in evidence_ids:
+            ev = _evidence_line(m)
+            if ev:
+                lines.append(ev)
     return "\n".join(lines)

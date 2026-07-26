@@ -145,6 +145,21 @@ def _build_agent(cfg, model) -> Agent:
                      lambda: T.screener_outcome_stats(days))
 
     @agent.tool
+    def remember(ctx: RunContext[ChatDeps], content: str,
+                 category: str = "preference") -> dict:
+        """把用户明确表达的稳定偏好或长期事实存入跨会话记忆。
+        只存长期有效的结论（如交易周期偏好、风险纪律），临时观点不要存。
+        category: preference（偏好）| fact（事实）。"""
+        return _tool(ctx, "save_memory", {"content": content, "category": category},
+                     lambda: T.save_memory(content, category))
+
+    @agent.tool
+    def forget(ctx: RunContext[ChatDeps], memory_id: int) -> dict:
+        """删除一条过时的长期记忆（id 见 system prompt 的【长期记忆】段落）。"""
+        return _tool(ctx, "forget_memory", {"memory_id": memory_id},
+                     lambda: T.forget_memory(memory_id))
+
+    @agent.tool
     def list_watchlists(ctx: RunContext[ChatDeps]) -> dict:
         """TradingView 关注列表（跑筛选扫描前先用这个拿 watchlist_id）。"""
         return _tool(ctx, "list_watchlists", {}, T.list_watchlists)
@@ -215,11 +230,70 @@ def _build_agent(cfg, model) -> Agent:
     return agent
 
 
-def _build_prompt(session_id: int, user_message_id: int, cfg, deps: ChatDeps):
+SUMMARY_MAX_CHARS = 400     # 早期摘要目标长度
+SUMMARY_SOURCE_CAP = 6000   # 单次喂给压缩器的原文上限
+
+
+def _summarize(model, prev_summary: str, new_text: str) -> str:
+    """用主模型做增量压缩。独立函数便于测试替换。"""
+    from pydantic_ai import Agent as _Agent
+    summarizer = _Agent(model, output_type=str, system_prompt=(
+        "你是对话历史压缩器。把旧摘要与新增对话合并压缩成一段中文摘要，"
+        f"不超过 {SUMMARY_MAX_CHARS} 字。只保留：用户的稳定偏好与要求、"
+        "讨论过的标的与周期、已得出的结论和关键数值、未决问题。"
+        "不要客套，不要复述闲聊。"))
+    prompt = f"【旧摘要】\n{prev_summary or '（无）'}\n\n【新增对话】\n{new_text}"
+    return summarizer.run_sync(prompt).output.strip()
+
+
+def _maybe_compress(session_id: int, prior: list, model, deps: ChatDeps) -> str:
+    """溢出窗口的早期历史 → 增量压缩为会话摘要。
+
+    返回当前可用的摘要（可为空串）。压缩失败降级：沿用旧摘要、游标不前进
+    （下轮自动重试），绝不阻塞本轮对话。压缩过程作为一步 trace 呈现。
+    """
+    older = prior[:-HISTORY_LIMIT]
+    if not older:
+        return ""
+    sess = store.get_session(session_id) or {}
+    summary = sess.get("summary") or ""
+    upto = sess.get("summary_upto") or 0
+    fresh = [m for m in older if m["id"] > upto]
+    if not fresh:
+        return summary            # 摘要已覆盖全部溢出消息，零成本
+    deps.emit("tool_start", {"tool": "history_compress",
+                             "args": {"messages": len(fresh)}})
+    t0 = time.monotonic()
+    try:
+        new_summary = _summarize(model, summary,
+                                 render_history(fresh)[:SUMMARY_SOURCE_CAP])
+        store.update_session_summary(session_id, new_summary, older[-1]["id"])
+        deps.trace.append({"tool": "history_compress",
+                           "args": {"messages": len(fresh)},
+                           "result": new_summary[:RESULT_TRUNC]})
+        deps.emit("tool_end", {"tool": "history_compress", "ok": True,
+                               "summary": new_summary[:400],
+                               "elapsed_ms": int((time.monotonic() - t0) * 1000)})
+        return new_summary
+    except Exception as e:
+        applog("chat", "warn", f"history compress failed: {e!r}")
+        deps.emit("tool_end", {"tool": "history_compress", "ok": False,
+                               "summary": f"压缩失败，沿用旧摘要: {e}"[:400],
+                               "elapsed_ms": int((time.monotonic() - t0) * 1000)})
+        return summary
+
+
+def _build_prompt(session_id: int, user_message_id: int, cfg, deps: ChatDeps,
+                  model=None):
     msgs = store.list_messages(session_id)
     current = next(m for m in msgs if m["id"] == user_message_id)
-    history = [m for m in msgs if m["id"] < user_message_id][-HISTORY_LIMIT:]
+    prior = [m for m in msgs if m["id"] < user_message_id]
+    history = prior[-HISTORY_LIMIT:]
+    summary = _maybe_compress(session_id, prior, model, deps) if model is not None else ""
     text = ""
+    if summary:
+        text += "【会话早期摘要】（窗口外更早对话的压缩；用户追问细节时可基于此回答）\n" \
+                f"{summary}\n\n"
     if history:
         text += "【对话历史（最近 %d 条）】\n%s\n\n【当前消息】\n" % (
             len(history), render_history(history))
@@ -327,8 +401,10 @@ def run_turn(turn_row, model_override=None) -> None:
         has_llm = cfg.main_channel is not None and bool(cfg.main_channel.api_key)
         if not cfg.enabled or (not has_llm and model_override is None):
             raise RuntimeError("Agent 未启用或未配置 LLM 渠道（请到系统设置页配置）")
-        prompt, current = _build_prompt(session_id, turn_row["user_message_id"], cfg, deps)
+        # 模型先于 prompt 构建：溢出历史的增量压缩需要它
         model = model_override or build_model(cfg.main_channel, cfg.model)
+        prompt, current = _build_prompt(session_id, turn_row["user_message_id"],
+                                        cfg, deps, model=model)
         agent = _build_agent(cfg, model)
         run = asyncio.run(_drive(agent, prompt, deps, cfg, buf))
         buf.flush()

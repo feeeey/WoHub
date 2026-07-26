@@ -86,6 +86,13 @@
             {{ formTestResult.ok ? '测试执行成功' : '测试失败: ' + (formTestResult.error || '') }}
           </div>
           <div v-if="formTestResult.ok && formTestResult.detail" class="test-detail">
+            <!-- 限流/接口异常必须显式呈现：否则「0 命中」看起来就是行情平静 -->
+            <div v-if="formTestResult.detail.failures && formTestResult.detail.failures.length"
+                 class="test-detail-section test-warn">
+              <strong>⚠️ {{ formTestResult.detail.failures.length }} 个筛选器未取到结果：</strong>
+              {{ formTestResult.detail.failures.join(' · ') }}
+              <div class="test-warn-hint">结果不完整，勿据此判断行情平静（常见原因：TradingView 限流或未配置 Pine Cookie）</div>
+            </div>
             <div v-if="formTestResult.detail.results" class="test-detail-section">
               <strong>筛选结果：</strong>
               <span v-for="(r, i) in formTestResult.detail.results" :key="i">
@@ -176,8 +183,12 @@
         </div>
       </div>
 
-      <div v-if="t.testResult" class="test-result" :class="t.testResult.ok ? 'test-ok' : 'test-fail'">
+      <div v-if="t.testResult" class="test-result"
+           :class="testResultClass(t.testResult)">
         {{ t.testResult.ok ? '执行成功' + (t.testResult.detail?.total_signals != null ? ' -- ' + t.testResult.detail.total_signals + ' 个信号' : '') : '执行失败: ' + (t.testResult.error || '') }}
+        <span v-if="screenerFailures(t.testResult).length" class="test-warn-inline">
+          ⚠️ {{ screenerFailures(t.testResult).length }} 个筛选器未取到结果，结果不完整
+        </span>
       </div>
 
       <!-- History -->
@@ -243,6 +254,16 @@ const form = ref({
 
 function cleanSymbol(sym) {
   return sym.replace('BINANCE:', '').replace('.P', '')
+}
+
+function screenerFailures(res) {
+  return res?.detail?.failures || []
+}
+
+// 部分筛选器挂掉时既不是成功也不是失败：结果是真的，但不完整
+function testResultClass(res) {
+  if (!res.ok) return 'test-fail'
+  return screenerFailures(res).length ? 'test-partial' : 'test-ok'
 }
 
 function watchlistName(id) {
@@ -438,6 +459,11 @@ onMounted(() => {
 .test-result { margin-top: 12px; padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13px; }
 .test-ok { background: var(--success-subtle); color: var(--success); }
 .test-fail { background: var(--danger-subtle); color: var(--danger); }
+/* 结果为真但不完整——单独一档，不要和「成功」共用绿色 */
+.test-partial { background: var(--warning-subtle); color: var(--warning); }
+.test-warn-inline { display: block; margin-top: 4px; font-size: 12px; }
+.test-warn { color: var(--warning); }
+.test-warn-hint { margin-top: 2px; font-size: 12px; opacity: 0.85; }
 
 .history-toggle {
   margin-top: 12px; font-size: 13px; color: var(--accent);

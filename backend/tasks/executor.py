@@ -3,7 +3,7 @@ import traceback
 from datetime import datetime, timezone
 from database import get_db
 from config import settings
-from sources.pine_screener import run_screener
+from sources.pine_screener import run_screener, ScreenerUnavailable
 from agent.decider import SignalBatch, RuleDecider, bias_map_for
 from channels.sender import send_text
 from screenshots import capture_and_dispatch
@@ -20,6 +20,42 @@ DEFAULT_MAX_SCREENSHOTS = 3
 SCREENSHOT_HARD_CAP = 20
 # 连续失败这么多次就放弃本轮剩余截图 —— ChartShot 卡住时继续投递只会加深积压
 SCREENSHOT_FAILURE_STREAK = 2
+
+
+def _run_screeners(task_id, screeners, resolutions, watchlist_id):
+    """跑完所有 screener×timeframe 组合。返回 (成功结果, 失败说明)。
+
+    失败与「跑成了但 0 命中」必须分开：把失败当空结果会让限流的一轮看起来
+    像行情平静，用户据此以为没机会。失败明细进消息和 app 日志。
+    """
+    results, failures = [], []
+    for res in resolutions:
+        for sc in screeners:
+            label = sc.get("label", sc["screener_name"])
+            try:
+                symbols = run_screener(sc["folder_type"], sc["screener_name"],
+                                       res, watchlist_id)
+            except ScreenerUnavailable as e:
+                failures.append(f"{label}({res})")
+                applog("executor", "error", f"任务 {task_id}: 筛选器未取到结果 — {e}")
+                continue
+            except Exception as e:
+                failures.append(f"{label}({res})")
+                applog("executor", "error", f"任务 {task_id}: 筛选器异常 {label}({res}): {e}")
+                continue
+            results.append({"label": label, "resolution": res,
+                            "symbols": symbols, "count": len(symbols)})
+            applog("executor", "info", f"Screener {label} ({res}): {len(symbols)} symbols")
+    return results, failures
+
+
+def _failure_note(failures):
+    """失败明细的一行中文说明，附到推送消息尾部。"""
+    if not failures:
+        return ""
+    return (f"\n\n⚠️ {len(failures)} 个筛选器本轮未取到结果："
+            f"{' · '.join(failures[:6])}"
+            f"{' 等' if len(failures) > 6 else ''}（结果不完整，勿据此判断行情平静）")
 
 
 def _shot_limit(config):
@@ -119,19 +155,17 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
     is_single = len(screeners) <= 1
 
     # Run all screener×timeframe combos sequentially (TradingView API: no concurrency)
-    all_results = []
-    for res in resolutions:
-        for sc in screeners:
-            try:
-                symbols = run_screener(sc["folder_type"], sc["screener_name"], res, watchlist_id)
-                label = sc.get("label", sc["screener_name"])
-                all_results.append({"label": label, "resolution": res, "symbols": symbols, "count": len(symbols)})
-                applog("executor", "info", f"Screener {label} ({res}): {len(symbols)} symbols")
-            except Exception as e:
-                applog("executor", "error", f"Screener error: {e}")
+    all_results, failures = _run_screeners(task_id, screeners, resolutions, watchlist_id)
 
     if not all_results:
-        _last_results[task_id] = {"results": [], "signals": {}, "message": "无筛选结果"}
+        msg = ("全部筛选器本轮均未取到结果（限流或接口异常），并非行情平静"
+               if failures else "无筛选结果")
+        _last_results[task_id] = {"results": [], "signals": {}, "message": msg,
+                                  "failures": failures}
+        if failures:
+            applog("executor", "error", f"任务 {task_id}: {msg}：{' · '.join(failures)}")
+            _log_push(task_id, channel, msg, status="failed",
+                      error=" · ".join(failures))
         return
 
     batch = SignalBatch(task_id=task_id, task_type="watchlist_signal", config=config,
@@ -152,10 +186,11 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
         "signals": {sym: labels for sym, labels in list(all_signals.items())[:20]},
         "total_signals": len(all_signals),
         "message": "",
+        "failures": failures,
     }
 
     if not all_signals:
-        _last_results[task_id]["message"] = "无信号命中"
+        _last_results[task_id]["message"] = "无信号命中" + _failure_note(failures)
         return
 
     # Build message grouped by timeframe
@@ -171,12 +206,11 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
             lines.append(f"  {clean_sym} → {' · '.join(labels)}")
         lines.append(f"  共 {len(sigs)} 个标的")
     lines.append(f"\n合计 {len(all_signals)} 个标的")
-    message = "\n".join(lines)
+    message = "\n".join(lines) + _failure_note(failures)
     _last_results[task_id]["message"] = message
 
     if "text_summary" in actions and channel:
-        _send_push(channel, message)
-        _log_push(task_id, channel, message)
+        _push_and_log(task_id, channel, message)
 
     entries = [(sym, label, res)
                for res, sigs in signals_by_res.items()
@@ -200,15 +234,7 @@ def _exec_market_scan(task_id, config, actions, channel):
     overlap_threshold = config.get("overlap_threshold", 2)  # 仅用于消息文案；过滤阈值由 RuleDecider 从 config 读取
     watchlist_id = config.get("watchlist_id", 0)
 
-    all_results = []
-    for res in resolutions:
-        for sc in screeners:
-            try:
-                symbols = run_screener(sc["folder_type"], sc["screener_name"], res, watchlist_id)
-                label = sc.get("label", sc["screener_name"])
-                all_results.append({"label": label, "resolution": res, "symbols": symbols, "count": len(symbols)})
-            except Exception as e:
-                print(f"[executor] Screener error: {e}")
+    all_results, failures = _run_screeners(task_id, screeners, resolutions, watchlist_id)
 
     batch = SignalBatch(task_id=task_id, task_type="market_scan", config=config,
                         results=all_results, bias_map=bias_map_for(screeners))
@@ -216,6 +242,11 @@ def _exec_market_scan(task_id, config, actions, channel):
     overlaps = rule_out.overlaps
 
     if not overlaps and not all_results:
+        if failures:
+            msg = "全市场扫描：全部筛选器本轮均未取到结果（限流或接口异常），并非行情平静"
+            applog("executor", "error", f"任务 {task_id}: {msg}：{' · '.join(failures)}")
+            _log_push(task_id, channel, msg, status="failed",
+                      error=" · ".join(failures))
         return
 
     lines = [f"📊 全市场扫描 [{datetime.now(timezone.utc).strftime('%m-%d %H:%M')} UTC]"]
@@ -226,11 +257,10 @@ def _exec_market_scan(task_id, config, actions, channel):
         for sym, labels in sorted(overlaps.items(), key=lambda x: -len(x[1])):
             clean = sym.replace("BINANCE:", "").replace(".P", "")
             lines.append(f"  {clean} ({len(labels)}): {' · '.join(labels)}")
-    message = "\n".join(lines)
+    message = "\n".join(lines) + _failure_note(failures)
 
     if "text_summary" in actions and channel:
-        _send_push(channel, message)
-        _log_push(task_id, channel, message)
+        _push_and_log(task_id, channel, message)
 
     entries = [(sym, r["label"], r["resolution"])
                for r in all_results for sym in r["symbols"] if sym in overlaps]
@@ -268,16 +298,11 @@ def _exec_anomaly_watch(task_id, config, actions, channel):
     if not anomalies:
         return
 
+    results, failures = _run_screeners(task_id, screeners, resolutions, watchlist_id)
     signal_hits = {}
-    for sc in screeners:
-        for res in resolutions:
-            try:
-                symbols = run_screener(sc["folder_type"], sc["screener_name"], res, watchlist_id)
-                label = sc.get("label", sc["screener_name"])
-                for sym in symbols:
-                    signal_hits.setdefault(sym, []).append(label)
-            except Exception:
-                pass
+    for r in results:
+        for sym in r["symbols"]:
+            signal_hits.setdefault(sym, []).append(r["label"])
 
     matches = []
     for a in anomalies:
@@ -295,11 +320,10 @@ def _exec_anomaly_watch(task_id, config, actions, channel):
         lines.append(f"其中 {len(matches)} 个有信号配合:")
         for m in matches[:10]:
             lines.append(f"  {m['symbol']} ({m.get('priceChangePercent', 0):+.2f}%) → {' · '.join(m['signals'])}")
-    message = "\n".join(lines)
+    message = "\n".join(lines) + _failure_note(failures)
 
     if "text_summary" in actions and channel:
-        _send_push(channel, message)
-        _log_push(task_id, channel, message)
+        _push_and_log(task_id, channel, message)
 
     # 不再要求 channel 存在：没配推送渠道时仍截图存档，供 UI / agent 事后调阅
     if "chart_shot" in actions:
@@ -332,10 +356,24 @@ def _exec_scheduled_shot(task_id, config, actions, channel):
 
 
 def _send_push(channel, text):
+    """返回 (ok, error)。调用方必须把结果传给 _log_push —— 早期这里吞掉异常后
+    _log_push 仍按默认的 success 落库，于是推送审计在最关键的故障上
+    （信号根本没送达用户）恒显示正常。用 _push_and_log 就不会再写错。"""
     try:
         send_text(channel["type"], channel["config"], text)
+        return True, None
     except Exception as e:
-        print(f"[executor] Push failed: {e}")
+        applog("executor", "error",
+               f"推送失败（渠道 {channel.get('name') or channel.get('id')}）: {e}")
+        return False, str(e)
+
+
+def _push_and_log(task_id, channel, text):
+    """发送 + 按真实结果落 push_logs。两件事绑在一起，避免再次走偏。"""
+    ok, err = _send_push(channel, text)
+    _log_push(task_id, channel, text,
+              status="success" if ok else "failed", error=err)
+    return ok
 
 
 def _log_push(task_id, channel, content, status="success", error=None):

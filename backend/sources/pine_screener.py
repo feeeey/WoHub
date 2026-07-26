@@ -16,6 +16,15 @@ _RETRY_BACKOFF = [3, 5, 8]
 
 SCREENERS_DIR = Path(__file__).resolve().parent.parent / "screeners"
 
+
+class ScreenerUnavailable(RuntimeError):
+    """筛选器这一轮没跑成（限流 / TradingView 内部错误 / 重试耗尽）。
+
+    刻意与「跑成了但没命中」区分开：早期两者都返回 []，于是被限流的一轮
+    看起来跟行情平静一模一样——推送里显示「0 命中」，用户以为没机会，实际是
+    根本没查到。调用方必须把这个异常记成失败而不是空结果。
+    """
+
 SCREENER_NAMES = {
     "oscillator/divergence": "顶底背离",
     "oscillator/divergence_top": "顶背离",
@@ -68,11 +77,13 @@ _HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
 }
 
+# 只保留无身份含义的偏好项。曾经这里硬编码过一个真实的 device_t 会话令牌和
+# _ga 标识：那是从某个人的浏览器里抄出来的凭据，进了版本库就是泄漏，而且会让
+# 所有部署共用同一个 TradingView 设备身份（一处被限流，处处被限流）。
+# 登录态一律由运营者在「系统设置 → Pine Cookie」里提供，UI 上也是这么写的。
 _DEFAULT_COOKIES = {
     "cookiePrivacyPreferenceBannerProduction": "notApplicable",
-    "_ga": "GA1.1.988197279.1751463257",
     "cookiesSettings": '{"analytics":true,"advertising":true}',
-    "device_t": "TEJXbkFROjI.yyWBVaicBcv2-vz8MOi8BXPXha69djS99xuip1BAK_4",
     "cachec": "undefined",
     "etg": "undefined",
     "theme": "light",
@@ -98,7 +109,11 @@ def _get_session():
 
 
 def _load_cookies():
-    """Load cookies, merging saved values with defaults (matching original pine-screener behavior)."""
+    """Load cookies, merging operator-supplied values over the benign defaults.
+
+    没有运营者提供的登录态时明确告警：TradingView 会返回空结果而不是 401，
+    看起来就像「今天没有信号」——这类静默失败最难排查。
+    """
     merged = dict(_DEFAULT_COOKIES)
     cookie_path = Path(settings.db_path).parent / "cookies.json"
     if cookie_path.exists():
@@ -106,8 +121,13 @@ def _load_cookies():
             with open(cookie_path) as f:
                 saved = json.load(f)
             merged.update(saved)
-        except Exception:
-            pass
+        except Exception as e:
+            applog("pine_screener", "error",
+                   f"cookies.json 读取失败，将以未登录状态请求：{e}")
+    if not any(k.startswith("session") or k == "device_t" for k in merged):
+        applog("pine_screener", "warn",
+               "未配置 TradingView 登录 Cookie，筛选结果可能恒为空 —— "
+               "请到「系统设置 → Pine Cookie」粘贴浏览器 Cookie 字符串")
     return merged
 
 
@@ -216,8 +236,11 @@ def run_screener(folder_type, screener_name, resolution, watchlist_id):
                 raise
 
     if resp is None or '"request_limit_reached"' in resp.text or '"internal_error"' in resp.text:
-        applog("pine_screener", "error", f"All retries exhausted ({resp.text[:100] if resp else 'no response'})")
-        return []
+        detail = resp.text[:100] if resp is not None else "no response"
+        applog("pine_screener", "error", f"All retries exhausted ({detail})")
+        raise ScreenerUnavailable(
+            f"{folder_type}/{screener_name} {resolution}: "
+            f"重试 {_MAX_RETRIES} 次后仍未取到结果（{detail}）")
 
     symbols = []
     seen = set()

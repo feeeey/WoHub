@@ -56,7 +56,7 @@ pytest -m "not network"       # Skip live API tests
 ### Task execution flow
 
 1. Scheduler triggers a task (cron or interval)
-2. `executor.py` calls `pine_screener.run_screener()` for each screener x timeframe combo (rate-limited: 1 req/2 sec)
+2. `executor.py` calls `pine_screener.run_screener()` for each screener x timeframe combo (rate-limited: 1 req/2 sec)。走 `_run_screeners()` 统一收口：限流/接口异常抛 `ScreenerUnavailable`，与「跑成了但 0 命中」严格区分——早期两者都返回 `[]`，被限流的一轮看起来跟行情平静一模一样。失败明细进消息尾部、app 日志和 `push_logs`
 3. `RuleDecider.decide()` (the decision seam in `backend/agent/decider.py`) applies overlap/confluence thresholds
 4. Sends results via configured channel (Telegram/Discord)
 5. Optionally captures ChartShot screenshots (`chart_shot` action，不再要求配了推送渠道——没渠道时只截图存档)
@@ -91,7 +91,9 @@ TradingView 页面结构，改版会静默失败（返回 ok 但少文件）—�
 Conversational agent at `/agent` (Manus-style): multi-session chat persisted to
 SQLite, background worker drains `chat_turns`, events append to `chat_events`,
 SSE stream (`GET /api/chat/sessions/{id}/stream?after=N`) is a resumable
-observation window. Tools are read-only (screener scan with progress events,
+observation window. 单轮有 `TURN_TIMEOUT_S`（15 分钟）墙钟上限：worker 是单线程
+串行 drain，取消检查点只在流式数据块之间，模型挂起不发块时永远检查不到，
+没有外层超时就会永久阻塞整个 agent。 Tools are read-only (screener scan with progress events,
 klines/indicators/structure, market snapshot/overview, signal history,
 ChartShot capture + vision relay, position-plan preview, account overview) and
 throttled; per-turn `max_tool_calls` + `deep_dive_limit` budgets. Screener
@@ -125,6 +127,13 @@ system prompt 的语义档案每条附带 `↳ 近90天后验（n=…）` 行（
 声明：连续折分段一致性 + 精确二项检验 + Bonferroni 校正，样本不足显式
 not_validated——pass 含义是「方向声明与后验分布显著一致」，不是可盈利。
 
+**统计的检验对象是时间簇，不是原始信号行**（`OutcomeValidator.cluster`，按视界
+长度分桶取簇内均值）。一次扫描会在几十个高度相关的币种上同时命中、条件持续时
+同一标的还会连续多根K线重复触发，把每行当独立试验会把 n 虚增一个数量级：
+蒙特卡洛显示对一个毫无优势的筛选器，按行计数在 alpha=0.05 下有 33% 概率判出
+「显著」（名义应为 2.5%）。`min_samples` 作用于簇数；统计行同时给出
+`n=… 条 / … 个独立时段`，独立时段 <10 标注「结论脆弱」。改这块务必保持这个区分。
+
 **行为评测**：改 prompt/换模型前后跑 `python -m evals`（离线，存量轨迹按
 prompt_version×model 分桶）与 `python -m evals --live`（金标实跑，工具数据
 用 evals/fixtures.py 固定，产生真实 LLM 费用）。金标用例在 `evals/golden/`，
@@ -141,6 +150,18 @@ Single SQLite file at `data/wohub.db`. Schema defined in `backend/database.py` (
 ### Auth
 
 Cookie-based sessions using `itsdangerous.URLSafeTimedSerializer`. Single shared password set via `APP_PASSWORD` env var.
+
+会话签名密钥是 `settings.session_secret`，**刻意不等于 `SECRET_KEY`**：后者的默认值
+是公开的，用它签名意味着任何人都能离线铸造 `{"authenticated": true}` cookie。
+`SECRET_KEY` 非默认时原样沿用；仍是默认值时改用 `data/session_key` 里自动生成并
+持久化的随机密钥（0600）。凭据加密**仍**派生自 `SECRET_KEY`（`trading/credentials.py`），
+两者分开是为了让这个防护不会连带作废已存的 API secret。`data/session_key`
+需要随数据库一起备份。
+
+前端静态资源由 `main.mount_spa()` 挂载，路径经 `resolve_static_file()` 做
+realpath + 根目录包含校验——SPA 兜底路由拿到的 path 已被百分号解码，
+`%2e%2e%2f` 到那里就是 `../`。该路由只在生产镜像（存在 `backend/static/`）里注册，
+所以务必用 `tests/test_spa_static.py` 的方式测试：把目录作为参数挂到临时 app 上。
 
 ## Environment Variables
 
@@ -163,5 +184,11 @@ Cookie-based sessions using `itsdangerous.URLSafeTimedSerializer`. Single shared
 - Backend uses Pydantic models for request validation in API routes
 - Pine screener rate limiting enforced with thread locks (2-second intervals)
 - Retry logic: 3 retries with exponential backoff [3s, 5s, 8s] for TradingView calls
-- System logs use an in-memory ring buffer (200 entries max) via `app_logger.py`
+- System logs use in-memory ring buffers via `app_logger.py`：1000 条全级别流水 +
+  500 条 warn/error 专用（查询时合并去重）。分两条是因为筛选器的 info/debug 流水
+  会在几分钟内把错误挤没，而排障发生在事后
+- `tasks/scheduler.py` 必须保留 `misfire_grace_time`：所有 CRON_TRIGGERS 都撞在
+  同一分钟标记上，配合 `max_workers=1`，用 APScheduler 的 1 秒默认值会让同时到期的
+  任务**除第一个外全部被静默丢弃**（不是延后，是丢弃）。APScheduler 自己的漏跑
+  警告经 `_ApplogHandler` 桥接进 app_logger，否则只到 stderr、UI 完全看不见
 - Frontend dark/light theme toggle persisted to localStorage

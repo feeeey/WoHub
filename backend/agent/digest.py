@@ -35,6 +35,12 @@ def _digest_session_id() -> int:
     return row["id"] if row else store.create_session(DIGEST_SESSION_TITLE)
 
 
+def _trigger_prefix(task_id: int) -> str:
+    """触发消息的固定前缀。带上书名号才能把任务号界定住——否则 LIKE '任务#1%'
+    会被 '任务#12《…》' 命中，让任务 1 误判为冷却中而被静默跳过。"""
+    return f"{DIGEST_PREFIX} 任务#{task_id}《"
+
+
 def _in_cooldown(session_id: int, task_id: int, cooldown_minutes: int) -> bool:
     """同任务冷却：查简评会话里该任务最近一条触发消息的时间。"""
     if cooldown_minutes <= 0:
@@ -43,14 +49,22 @@ def _in_cooldown(session_id: int, task_id: int, cooldown_minutes: int) -> bool:
     try:
         row = db.execute(
             """SELECT 1 FROM chat_messages
-               WHERE session_id = ? AND role = 'user' AND content LIKE ?
+               WHERE session_id = ? AND role = 'user'
+                 AND content LIKE ? ESCAPE '\\'
                  AND created_at >= datetime('now', ?)
                LIMIT 1""",
-            (session_id, f"{DIGEST_PREFIX} 任务#{task_id}%",
+            (session_id, _like_literal(_trigger_prefix(task_id)) + "%",
              f"-{cooldown_minutes} minutes")).fetchone()
         return row is not None
     finally:
         db.close()
+
+
+def _like_literal(text: str) -> str:
+    """转义 LIKE 通配符，让前缀按字面量匹配（任务名可能含 % 或 _）。"""
+    for ch in ("\\", "%", "_"):
+        text = text.replace(ch, "\\" + ch)
+    return text
 
 
 def _task_name(task_id: int) -> str:
@@ -83,7 +97,7 @@ def enqueue_digest(task_id: int, summary_text: str, channel: dict | None) -> dic
 
         name = _task_name(task_id)
         content = (
-            f"{DIGEST_PREFIX} 任务#{task_id}《{name}》触发信号：\n"
+            f"{_trigger_prefix(task_id)}{name}》触发信号：\n"
             f"{(summary_text or '').strip()[:MAX_TRIGGER_CHARS]}\n\n"
             "请给出简评：结合语义档案的后验统计评估这批信号的整体可信度，"
             "点出最值得关注的 1~3 个标的并给出可复核的理由；200 字以内；"

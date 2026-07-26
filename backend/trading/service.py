@@ -553,11 +553,17 @@ def close_position(credential_id: int, symbol: str) -> OrderResult:
         symbol=symbol.upper(), side=side, order_type="MARKET",
         quantity=qty, reduce_only=True,
     )
+    # 幂等键 + 网络异常查单确认，与本模块其余下单路径保持一致。这里曾是唯一的
+    # 例外：没有 clientOrderId，transport 层重发（proxy→direct 回退）无法被交易所
+    # 去重；也只捕获 BinanceAPIError，网络异常会直接冒成 500 且不落
+    # trading_orders —— 平仓到底成没成，事后无从判断。
+    client_oid = _new_client_order_id()
     try:
         raw = bn.place_order(
             env, api_key, secret,
             symbol=symbol.upper(), side=side, order_type="MARKET",
             quantity=qty, reduce_only=True,
+            new_client_order_id=client_oid,
         )
         result = OrderResult(
             ok=True,
@@ -567,8 +573,22 @@ def close_position(credential_id: int, symbol: str) -> OrderResult:
             avg_price=float(raw.get("avgPrice", 0)) or 0.0,
             raw=raw,
         )
-    except BinanceAPIError as e:
-        result = OrderResult(ok=False, error=str(e))
+    except (BinanceAPIError, requests.RequestException) as e:
+        if (isinstance(e, BinanceAPIError)
+                and e.code != bn.ERR_DUPLICATE_CLIENT_ORDER_ID):
+            result = OrderResult(ok=False, error=str(e))
+        else:
+            state, raw = _query_order_state(
+                env, api_key, secret, symbol.upper(), client_oid)
+            if state == "exists" and _order_effective(raw):
+                result = OrderResult(
+                    ok=True, binance_order_id=str(raw.get("orderId", "")),
+                    status=raw.get("status"),
+                    executed_qty=float(raw.get("executedQty", 0) or 0),
+                    avg_price=float(raw.get("avgPrice", 0) or 0), raw=raw,
+                )
+            else:
+                result = OrderResult(ok=False, error=f"平仓请求异常（{state}）：{e}")
     _record_order(credential_id, env, req, result)
     return result
 

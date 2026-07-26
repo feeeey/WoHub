@@ -170,10 +170,15 @@ def delete_task(task_id: int):
     signal_ids = [r["id"] for r in db.execute("SELECT id FROM signals WHERE task_id = ?", (task_id,)).fetchall()]
     if signal_ids:
         placeholders = ",".join("?" * len(signal_ids))
-        db.execute(f"DELETE FROM outcomes WHERE signal_id IN ({placeholders})", signal_ids)
-        db.execute(f"DELETE FROM snapshots WHERE signal_id IN ({placeholders})", signal_ids)
-        db.execute(f"DELETE FROM screenshots WHERE signal_id IN ({placeholders})", signal_ids)
-        db.execute(f"DELETE FROM signals WHERE task_id = ?", (task_id,))
+        # 每一张引用 signals(id) 的表都必须在这里出现。get_db 开了
+        # PRAGMA foreign_keys=ON，漏掉任何一张都会让 DELETE FROM signals 直接
+        # IntegrityError —— 漏掉 outcome_checks 曾导致「凡是出过信号的任务都删不掉」，
+        # 而且因为异常没被捕获，接口返回的是 500 而不是可读的错误。
+        for child in ("outcomes", "snapshots", "screenshots",
+                      "outcome_checks", "agent_decisions"):
+            db.execute(f"DELETE FROM {child} WHERE signal_id IN ({placeholders})",
+                       signal_ids)
+        db.execute("DELETE FROM signals WHERE task_id = ?", (task_id,))
     db.execute("DELETE FROM push_logs WHERE task_id = ?", (task_id,))
     db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     db.commit()

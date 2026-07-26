@@ -1,0 +1,45 @@
+# Docker 的 COPY **不看** .gitignore。没有这个文件时，`COPY backend/ ./` 会把
+# 开发机上的 backend/data/wohub.db 一起烤进镜像层——那个库里有 Fernet 加密的
+# 交易 API secret、LLM API Key、完整聊天记录与信号历史。运行时它会被
+# ./data:/app/data 的挂载遮住，所以从界面上完全看不出来，但拿到镜像的人
+# 随时能把那一层扒出来。
+
+# 运行时数据（由 volume 挂载提供）
+backend/data/
+data/
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/cookies.json
+
+# 密钥与环境
+.env
+.env.*
+**/session_key
+
+# 构建产物与缓存
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+.venv/
+venv/
+node_modules/
+frontend/dist/
+backend/static/
+
+# 测试与工具产物
+.pytest_cache/
+backend/.pytest_tmp/
+.coverage
+.superpowers/
+
+# 版本控制与 IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+.claude/
+
+# 文档：不进运行镜像
+docs/
+*.md

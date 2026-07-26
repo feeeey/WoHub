@@ -103,18 +103,32 @@ class ProbeBody(BaseModel):
 
 
 def _resolve_channel(body: ProbeBody) -> Channel:
-    """已存渠道为底 + inline 覆盖（支持渠道未保存先测）。"""
+    """已存渠道为底 + inline 覆盖（支持渠道未保存先测）。
+
+    红线：**已存的 API Key 只能发往它自己配的 base_url**。否则
+    `{"channel_id": 1, "base_url": "http://任意地址"}` 就能让服务端带着解密后的
+    密钥去连任意 URL——既是凭据外泄，也是打进内网的 SSRF 跳板。想换地址测就必须
+    连 Key 一起给（那是调用方自己的密钥，爱发哪发哪）。
+    """
     base = None
     if body.channel_id:
         base = get_channel(body.channel_id)
         if base is None:
             raise HTTPException(404, "渠道不存在")
+
+    inline_key = body.api_key is not None
+    if (base and body.base_url is not None
+            and body.base_url != base.base_url and not inline_key):
+        raise HTTPException(
+            400, "改用其他 base_url 测试时必须同时提供 API Key："
+                 "已保存的密钥不会被发往它所属地址以外的任何 URL")
+
     return Channel(
         id=base.id if base else 0,
         name=base.name if base else "(未保存)",
         provider=body.provider or (base.provider if base else "openai"),
         base_url=(base.base_url if base else "") if body.base_url is None else body.base_url,
-        api_key=(base.api_key if base else None) if body.api_key is None else body.api_key)
+        api_key=(base.api_key if base else None) if not inline_key else body.api_key)
 
 
 @router.post("/models")

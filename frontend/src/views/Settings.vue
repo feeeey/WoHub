@@ -462,6 +462,106 @@
       </div>
     </div>
 
+    <!-- Agent Behaviour Evals -->
+    <div class="card section">
+      <div class="section-header">
+        <h3 class="section-title">Agent 行为评测</h3>
+        <span v-if="evalActive" class="badge badge-warning">评测运行中…</span>
+      </div>
+      <p class="section-desc">
+        <strong>金标评测</strong>：12 条固定用例真跑 agent（工具数据固定，唯一变量是模型 + prompt），
+        约 2–5 分钟，产生真实 LLM 调用费用。改 prompt / 换模型前后各跑一次即可对比。<br>
+        <strong>离线报告</strong>：给存量对话轨迹打分（轨迹效率 + 答案质量规则），免费即时。
+      </p>
+      <div class="btn-row">
+        <button class="btn btn-primary btn-sm" @click="startLiveEvalRun" :disabled="!!evalActive">
+          跑金标评测
+        </button>
+        <button class="btn btn-sm" @click="runOfflineEvalNow" :disabled="offlineRunning">
+          {{ offlineRunning ? '统计中…' : '离线报告' }}
+        </button>
+      </div>
+      <div v-if="evalMsg" class="action-msg" :class="evalOk ? 'msg-ok' : 'msg-fail'">
+        {{ evalMsg }}
+      </div>
+
+      <table v-if="evalRuns.length" class="eval-table">
+        <thead><tr>
+          <th>#</th><th>时间</th><th>类型</th><th>prompt</th><th>模型</th>
+          <th>结果</th><th>Δ总分</th><th></th>
+        </tr></thead>
+        <tbody>
+          <template v-for="r in evalRuns" :key="r.id">
+            <tr>
+              <td>{{ r.id }}</td>
+              <td class="eval-time">{{ r.created_at }}</td>
+              <td>{{ r.kind === 'live' ? '金标' : '离线' }}</td>
+              <td>{{ r.prompt_version || '-' }}</td>
+              <td class="eval-model">{{ r.model || '-' }}</td>
+              <td>
+                <span v-if="r.status === 'running'" class="eval-running">运行中…</span>
+                <span v-else-if="r.status === 'failed'" class="clr-negative">失败：{{ (r.error || '').slice(0, 60) }}</span>
+                <span v-else-if="r.kind === 'live'">
+                  总分 <b>{{ r.summary?.avg_total }}</b>
+                  · L1 {{ r.summary?.avg_l1 }} · L2 {{ r.summary?.avg_l2 }} · L3 {{ r.summary?.avg_l3 }}
+                </span>
+                <span v-else>{{ r.summary?.n_traces }} 条轨迹 · {{ r.summary?.buckets?.length || 0 }} 个分桶</span>
+              </td>
+              <td>
+                <span v-if="evalDelta(r) !== null"
+                      :class="evalDelta(r) >= 0 ? 'clr-positive' : 'clr-negative'">
+                  {{ evalDelta(r) >= 0 ? '+' : '' }}{{ evalDelta(r).toFixed(4) }}
+                </span>
+                <span v-else>-</span>
+              </td>
+              <td class="eval-ops">
+                <button v-if="r.status === 'done'" class="btn-inline" @click="toggleEvalDetail(r.id)">
+                  {{ expandedEval === r.id ? '收起' : '详情' }}
+                </button>
+                <button v-if="r.status !== 'running'" class="btn-inline danger" @click="removeEvalRun(r.id)">删</button>
+              </td>
+            </tr>
+            <tr v-if="expandedEval === r.id && evalDetail">
+              <td colspan="8" class="eval-detail">
+                <!-- 金标：逐用例 -->
+                <table v-if="r.kind === 'live' && evalDetail.results" class="eval-sub">
+                  <thead><tr><th>用例</th><th>总分</th><th>L1</th><th>L2</th><th>L3</th><th>调用</th><th>问题点</th></tr></thead>
+                  <tbody>
+                    <tr v-for="c in evalDetail.results" :key="c.case_id">
+                      <td>{{ c.case_id }}</td>
+                      <td :class="c.total < 0.7 ? 'clr-negative' : ''">{{ c.total }}</td>
+                      <td>{{ c.l1?.score ?? '-' }}</td>
+                      <td>{{ c.l2?.score ?? '-' }}</td>
+                      <td>{{ c.l3?.score ?? '-' }}</td>
+                      <td>{{ c.n_steps }}</td>
+                      <td class="eval-issues">{{ caseIssues(c) || '-' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <!-- 离线：分桶 -->
+                <table v-else-if="evalDetail.summary?.buckets" class="eval-sub">
+                  <thead><tr><th>prompt</th><th>模型</th><th>n</th><th>均调用</th><th>重复</th><th>工具报错</th><th>L2</th><th>L3</th><th>规则违例</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(b, i) in evalDetail.summary.buckets" :key="i">
+                      <td>{{ b.prompt_version }}</td>
+                      <td class="eval-model">{{ b.model }}</td>
+                      <td>{{ b.n }}</td>
+                      <td>{{ b.avg_tool_calls }}</td>
+                      <td>{{ b.total_repeats }}</td>
+                      <td>{{ b.total_tool_errors }}</td>
+                      <td>{{ b.avg_l2 }}</td>
+                      <td>{{ b.avg_l3 ?? '-' }}</td>
+                      <td class="eval-issues">{{ bucketFails(b) || '-' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
     <!-- Screener Semantics -->
     <div class="card section">
       <div class="section-header">
@@ -524,7 +624,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../api/client.js'
 import SymbolPicker from '../components/SymbolPicker.vue'
 
@@ -949,6 +1049,132 @@ async function testChannel() {
   }
 }
 
+// ---- Agent 行为评测 ----
+const evalRuns = ref([])
+const evalActive = ref(null)      // 正在轮询的 run id
+const evalTimer = ref(null)
+const offlineRunning = ref(false)
+const evalMsg = ref('')
+const evalOk = ref(true)
+const expandedEval = ref(null)
+const evalDetail = ref(null)
+
+async function loadEvalRuns() {
+  try {
+    const res = await api.listEvalRuns()
+    evalRuns.value = res.runs || []
+    // 页面刷新时若有 run 还在跑，恢复轮询
+    const running = evalRuns.value.find(r => r.status === 'running')
+    if (running && !evalTimer.value) pollEval(running.id)
+  } catch {
+    evalRuns.value = []
+  }
+}
+
+function stopEvalPolling() {
+  if (evalTimer.value) { clearInterval(evalTimer.value); evalTimer.value = null }
+  evalActive.value = null
+}
+
+function pollEval(runId) {
+  evalActive.value = runId
+  evalTimer.value = setInterval(async () => {
+    try {
+      const run = await api.getEvalRun(runId)
+      if (run.status !== 'running') {
+        stopEvalPolling()
+        await loadEvalRuns()
+        if (run.status === 'done') {
+          evalMsg.value = `评测 #${runId} 完成：总分 ${run.summary?.avg_total}`
+          evalOk.value = true
+        } else {
+          evalMsg.value = `评测 #${runId} 失败：${run.error || '未知原因'}`
+          evalOk.value = false
+        }
+      }
+    } catch {
+      stopEvalPolling()
+    }
+  }, 3000)
+}
+
+async function startLiveEvalRun() {
+  if (!confirm('金标评测会真实调用 LLM（12 条用例，约 2–5 分钟，产生 API 费用）。继续？')) return
+  evalMsg.value = ''
+  try {
+    const res = await api.startLiveEval()
+    evalMsg.value = `评测 #${res.run_id} 已启动，运行中…`
+    evalOk.value = true
+    await loadEvalRuns()
+    pollEval(res.run_id)
+  } catch (e) {
+    evalMsg.value = e.message
+    evalOk.value = false
+  }
+}
+
+async function runOfflineEvalNow() {
+  offlineRunning.value = true
+  evalMsg.value = ''
+  try {
+    const run = await api.runOfflineEval()
+    evalMsg.value = `离线报告完成：${run.summary?.n_traces} 条轨迹`
+    evalOk.value = true
+    await loadEvalRuns()
+  } catch (e) {
+    evalMsg.value = e.message
+    evalOk.value = false
+  } finally {
+    offlineRunning.value = false
+  }
+}
+
+async function toggleEvalDetail(runId) {
+  if (expandedEval.value === runId) { expandedEval.value = null; evalDetail.value = null; return }
+  try {
+    evalDetail.value = await api.getEvalRun(runId)
+    expandedEval.value = runId
+  } catch (e) {
+    evalMsg.value = e.message; evalOk.value = false
+  }
+}
+
+async function removeEvalRun(runId) {
+  if (!confirm(`删除评测记录 #${runId}？`)) return
+  try {
+    await api.deleteEvalRun(runId)
+    if (expandedEval.value === runId) { expandedEval.value = null; evalDetail.value = null }
+    await loadEvalRuns()
+  } catch (e) {
+    evalMsg.value = e.message; evalOk.value = false
+  }
+}
+
+function evalDelta(r) {
+  // 与列表里更早一次「同类型且完成」的 run 比总分（金标比 avg_total）
+  if (r.kind !== 'live' || r.status !== 'done' || r.summary?.avg_total == null) return null
+  const older = evalRuns.value.find(o =>
+    o.id < r.id && o.kind === 'live' && o.status === 'done' && o.summary?.avg_total != null)
+  if (!older) return null
+  return r.summary.avg_total - older.summary.avg_total
+}
+
+function caseIssues(c) {
+  const out = [...(c.l1?.violations || [])]
+  if (c.l2?.repeats) out.push(`重复调用×${c.l2.repeats}`)
+  if (c.l2?.n_calls > c.l2?.max_allowed) out.push(`超预算 ${c.l2.n_calls}/${c.l2.max_allowed}`)
+  for (const [name, ok] of Object.entries(c.l3?.rules || {})) {
+    if (ok === false) out.push(`规则失败:${name}`)
+  }
+  return out.join('; ')
+}
+
+function bucketFails(b) {
+  return Object.entries(b.rule_failures || {}).map(([k, v]) => `${k}×${v}`).join('; ')
+}
+
+onUnmounted(stopEvalPolling)
+
 const modelPickerFor = ref(null)          // null | 'model' | 'vision_model'
 const modelFilter = ref('')
 const pickerLoading = ref(false)
@@ -1035,6 +1261,7 @@ onMounted(() => {
   loadAgentConfig()
   loadChannels()
   loadSemantics()
+  loadEvalRuns()
   loadLogs()
 })
 </script>
@@ -1362,6 +1589,23 @@ onMounted(() => {
 
 .btn-inline { font-size: 12px; padding: 1px 8px; margin-left: 8px; cursor: pointer; }
 .btn-inline.danger { color: var(--danger, #d9534f); }
+
+/* --- Agent 行为评测 --- */
+.eval-table { width: 100%; margin-top: 14px; font-size: 12.5px; border-collapse: collapse; }
+.eval-table th, .eval-table td { padding: 6px 8px; text-align: left;
+  border-bottom: 1px solid var(--border, rgba(128,128,128,.15)); }
+.eval-table th { color: var(--text-secondary); font-weight: 500; font-size: 12px; }
+.eval-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.eval-model { font-family: monospace; font-size: 11.5px; max-width: 160px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eval-running { color: var(--warning, #d9a03c); }
+.eval-ops { white-space: nowrap; }
+.eval-detail { background: var(--bg-tertiary, rgba(128,128,128,.05)); padding: 10px 14px; }
+.eval-sub { width: 100%; font-size: 12px; border-collapse: collapse; }
+.eval-sub th, .eval-sub td { padding: 4px 8px; border-bottom: 1px dashed var(--border, rgba(128,128,128,.12)); }
+.eval-issues { color: var(--text-secondary); max-width: 340px; }
+.clr-positive { color: var(--success, #3fa66a); }
+.clr-negative { color: var(--danger, #d9534f); }
 
 /* --- 手动截图 --- */
 .shot-divider { height: 1px; background: var(--border, rgba(128,128,128,.2));

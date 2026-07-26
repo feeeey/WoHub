@@ -116,10 +116,13 @@ prompt_version×model 分桶）与 `python -m evals --live`（金标实跑，工
 用 evals/fixtures.py 固定，产生真实 LLM 费用）。金标用例在 `evals/golden/`，
 工具名用 trace 内部名（`_tool()` 的 name 参数，非注册函数名）。评分权重与
 规则见 `evals/scoring.py`；system prompt 里新增的行为承诺应同步加进 L3 规则。
+Settings 页有评测卡片（历史落 `eval_runs` 表，带前后对比）；金标实跑在
+**子进程**里执行（`evals/service.py`）——fixtures 对 agent.tools 的 patch 是
+进程级的，进程内跑会让并发的 chat 轮次拿到假行情。
 
 ### Database
 
-Single SQLite file at `data/wohub.db`. Schema defined in `backend/database.py` (SCHEMA constant, append-only — editing existing CREATE TABLE bodies is a silent no-op). Key tables: channels, tasks, signals, snapshots, outcomes, outcome_checks, push_logs, screenshots (task_id 由 `_migrate()` 补加——只按 signal_id 级联删除会漏掉匹配不到信号的行), trading_credentials, trading_orders, agent_config, agent_runs (dormant — retained to avoid migration risk, no code writes), agent_decisions (dormant), chat_sessions, chat_messages, chat_turns, chat_events, screener_semantics, llm_channels.
+Single SQLite file at `data/wohub.db`. Schema defined in `backend/database.py` (SCHEMA constant, append-only — editing existing CREATE TABLE bodies is a silent no-op). Key tables: channels, tasks, signals, snapshots, outcomes, outcome_checks, push_logs, screenshots (task_id 由 `_migrate()` 补加——只按 signal_id 级联删除会漏掉匹配不到信号的行), trading_credentials, trading_orders, agent_config, agent_runs (dormant — retained to avoid migration risk, no code writes), agent_decisions (dormant), chat_sessions, chat_messages, chat_turns, chat_events, screener_semantics, llm_channels, eval_runs (评测历史).
 
 ### Auth
 

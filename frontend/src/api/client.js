@@ -390,6 +390,27 @@ export const api = {
     return request('/agent/test', { method: 'POST', body: JSON.stringify(overrides) })
   },
 
+  // ---- agent 行为评测 ----
+  async startLiveEval() {
+    return request('/evals/live', { method: 'POST' })
+  },
+
+  async runOfflineEval() {
+    return request('/evals/offline', { method: 'POST' })
+  },
+
+  async listEvalRuns() {
+    return request('/evals/runs')
+  },
+
+  async getEvalRun(id) {
+    return request(`/evals/runs/${id}`)
+  },
+
+  async deleteEvalRun(id) {
+    return request(`/evals/runs/${id}`, { method: 'DELETE' })
+  },
+
   async getScreenerSemantics() {
     return request('/agent/semantics')
   },

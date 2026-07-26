@@ -235,6 +235,20 @@ CREATE TABLE IF NOT EXISTS llm_channels (
     api_key_enc TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS eval_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('live', 'offline')),
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'done', 'failed')),
+    prompt_version TEXT,
+    model TEXT,
+    summary_json TEXT,
+    results_json TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
 """
 
 

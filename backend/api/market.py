@@ -13,6 +13,41 @@ _TV_PREFIX = {
 }
 
 
+@router.get("/symbols")
+def symbols(exchange: str = "Binance", limit: int = 800):
+    """可选标的列表，按 24h 成交量倒序 —— 给前端搜索选择器做本地过滤用。
+
+    默认只给 Binance：ChartShot 对无前缀标的一律拼成 `BINANCE:{symbol}.P`，
+    列出别家的标的会让人选到截不出图的东西。exchange=all 可取全部。
+    取数失败时返回空列表 + errors，调用方仍应允许自由输入（ChartShot 也认
+    `OANDA:XAUUSD` 这类列表外标的）。
+    """
+    data, errors = fetch_all_tickers()
+    best = {}
+    for t in data:
+        if exchange != "all" and t["exchange"].lower() != exchange.lower():
+            continue
+        sym = t["symbol"]
+        # 同一标的多交易所都有时，保留成交量最大的那条
+        if sym not in best or t["volume24h"] > best[sym]["volume24h"]:
+            best[sym] = t
+
+    rows = sorted(best.values(), key=lambda x: -x["volume24h"])[:max(1, min(limit, 2000))]
+    return {
+        "symbols": [
+            {
+                "symbol": r["symbol"],
+                "exchange": r["exchange"],
+                "lastPrice": r["lastPrice"],
+                "priceChangePercent": r["priceChangePercent"],
+                "volume24h": r["volume24h"],
+            }
+            for r in rows
+        ],
+        "errors": errors,
+    }
+
+
 @router.get("/funding-rates")
 def funding_rates():
     data, errors = fetch_all_funding_rates()

@@ -90,3 +90,53 @@ async def test_compare_auto_appends_usdt(mock_fn, client):
     resp = await client.get("/api/market/compare/btc")
     assert resp.status_code == 200
     assert len(resp.json()["data"]) >= 1
+
+
+# --- 标的列表（前端搜索选择器的数据源）---
+
+@pytest.mark.asyncio
+@patch("api.market.fetch_all_tickers", side_effect=_mock_tickers)
+async def test_symbols_defaults_to_binance(mock_fn, client):
+    """默认只给 Binance：ChartShot 把无前缀标的拼成 BINANCE:{sym}.P，
+    列出别家标的会让人选到截不出图的东西。"""
+    resp = await client.get("/api/market/symbols")
+    assert resp.status_code == 200
+    rows = resp.json()["symbols"]
+    assert {r["exchange"] for r in rows} == {"Binance"}
+    assert {r["symbol"] for r in rows} == {"BTCUSDT", "ETHUSDT", "LOWVOL"}
+
+
+@pytest.mark.asyncio
+@patch("api.market.fetch_all_tickers", side_effect=_mock_tickers)
+async def test_symbols_sorted_by_volume_desc(mock_fn, client):
+    resp = await client.get("/api/market/symbols")
+    vols = [r["volume24h"] for r in resp.json()["symbols"]]
+    assert vols == sorted(vols, reverse=True)
+
+
+@pytest.mark.asyncio
+@patch("api.market.fetch_all_tickers", side_effect=_mock_tickers)
+async def test_symbols_all_exchanges_dedupes_keeping_highest_volume(mock_fn, client):
+    """BTCUSDT 在 Binance/OKX 都有，去重后应保留成交量更大的 Binance 那条。"""
+    resp = await client.get("/api/market/symbols?exchange=all")
+    rows = resp.json()["symbols"]
+    btc = [r for r in rows if r["symbol"] == "BTCUSDT"]
+    assert len(btc) == 1
+    assert btc[0]["exchange"] == "Binance"
+
+
+@pytest.mark.asyncio
+@patch("api.market.fetch_all_tickers", side_effect=_mock_tickers)
+async def test_symbols_respects_limit(mock_fn, client):
+    resp = await client.get("/api/market/symbols?limit=1")
+    assert len(resp.json()["symbols"]) == 1
+
+
+@pytest.mark.asyncio
+@patch("api.market.fetch_all_tickers", return_value=([], [{"exchange": "Binance", "error": "boom"}]))
+async def test_symbols_degrades_gracefully(mock_fn, client):
+    """取数失败不能 500 —— 前端要能继续自由输入。"""
+    resp = await client.get("/api/market/symbols")
+    assert resp.status_code == 200
+    assert resp.json()["symbols"] == []
+    assert resp.json()["errors"]

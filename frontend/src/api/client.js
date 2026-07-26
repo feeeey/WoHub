@@ -390,6 +390,10 @@ export const api = {
     return request('/agent/test', { method: 'POST', body: JSON.stringify(overrides) })
   },
 
+  async getAgentUsage(days = 30) {
+    return request(`/agent/usage?days=${days}`)
+  },
+
   async validateSemantics() {
     return request('/agent/semantics/validate', { method: 'POST' })
   },

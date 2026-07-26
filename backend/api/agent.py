@@ -254,6 +254,70 @@ def validate_semantics():
                     "not_validated=样本不足，拒绝背书；已按检验数做 Bonferroni 校正"}
 
 
+@router.get("/usage")
+def get_usage(days: int = 30):
+    """agent 用量观测：token 按日/按模型聚合 + 工具调用与失败率（来自 trace）。
+
+    token 数是模型 API 返回的原始计数，一直在逐消息落库但从未聚合——
+    这里只是把已有数据变可见，没有新的采集面。
+    """
+    import json as _json
+    from database import get_db
+
+    days = max(1, min(int(days), 365))
+    db = get_db(settings.db_path)
+    try:
+        daily = [dict(r) for r in db.execute(
+            """SELECT date(created_at) AS day,
+                      COUNT(*) AS turns,
+                      COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                      COALESCE(SUM(output_tokens), 0) AS output_tokens
+               FROM chat_messages
+               WHERE role = 'assistant' AND created_at >= datetime('now', ?)
+               GROUP BY day ORDER BY day DESC""",
+            (f"-{days} days",)).fetchall()]
+        by_model = [dict(r) for r in db.execute(
+            """SELECT COALESCE(model, 'unknown') AS model,
+                      COUNT(*) AS turns,
+                      COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                      COALESCE(SUM(output_tokens), 0) AS output_tokens
+               FROM chat_messages
+               WHERE role = 'assistant' AND created_at >= datetime('now', ?)
+               GROUP BY model ORDER BY input_tokens DESC""",
+            (f"-{days} days",)).fetchall()]
+        traces = db.execute(
+            """SELECT trace_json FROM chat_messages
+               WHERE role = 'assistant' AND trace_json IS NOT NULL
+                 AND created_at >= datetime('now', ?)""",
+            (f"-{days} days",)).fetchall()
+    finally:
+        db.close()
+
+    tools: dict[str, dict] = {}
+    for r in traces:
+        try:
+            steps = _json.loads(r["trace_json"]).get("steps") or []
+        except _json.JSONDecodeError:
+            continue
+        for s in steps:
+            name = s.get("tool")
+            if not name:
+                continue
+            t = tools.setdefault(name, {"calls": 0, "errors": 0})
+            t["calls"] += 1
+            if '"error"' in (s.get("result") or "")[:120]:
+                t["errors"] += 1
+    tool_stats = [{"tool": k, **v,
+                   "error_rate": round(v["errors"] / v["calls"], 4) if v["calls"] else 0}
+                  for k, v in sorted(tools.items(), key=lambda x: -x[1]["calls"])]
+
+    return {"window_days": days, "daily": daily, "by_model": by_model,
+            "tools": tool_stats,
+            "totals": {"turns": sum(d["turns"] for d in daily),
+                       "input_tokens": sum(d["input_tokens"] for d in daily),
+                       "output_tokens": sum(d["output_tokens"] for d in daily)}}
+
+
 # ---- 长期记忆管理（写入走 chat 工具，这里只有查看/删除）----
 
 @router.get("/memories")

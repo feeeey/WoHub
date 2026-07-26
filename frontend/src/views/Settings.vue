@@ -587,6 +587,54 @@
       </table>
     </div>
 
+    <!-- Agent Usage -->
+    <div class="card section">
+      <div class="section-header">
+        <h3 class="section-title">Agent 用量统计</h3>
+        <div class="btn-row">
+          <select v-model.number="usageDays" class="log-filter" @change="loadUsage">
+            <option :value="7">近 7 天</option>
+            <option :value="30">近 30 天</option>
+            <option :value="90">近 90 天</option>
+          </select>
+        </div>
+      </div>
+      <div v-if="usage" class="info-grid usage-totals">
+        <div class="info-item"><span class="info-label">轮次</span>
+          <span class="info-value">{{ usage.totals.turns }}</span></div>
+        <div class="info-item"><span class="info-label">输入 tokens</span>
+          <span class="info-value">{{ fmtTokens(usage.totals.input_tokens) }}</span></div>
+        <div class="info-item"><span class="info-label">输出 tokens</span>
+          <span class="info-value">{{ fmtTokens(usage.totals.output_tokens) }}</span></div>
+      </div>
+      <div v-if="usage && (usage.by_model.length || usage.tools.length)" class="usage-cols">
+        <table v-if="usage.by_model.length" class="eval-table">
+          <thead><tr><th>模型</th><th>轮次</th><th>输入</th><th>输出</th></tr></thead>
+          <tbody>
+            <tr v-for="m in usage.by_model" :key="m.model">
+              <td class="eval-model">{{ m.model }}</td>
+              <td>{{ m.turns }}</td>
+              <td>{{ fmtTokens(m.input_tokens) }}</td>
+              <td>{{ fmtTokens(m.output_tokens) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <table v-if="usage.tools.length" class="eval-table">
+          <thead><tr><th>工具</th><th>调用</th><th>失败</th><th>失败率</th></tr></thead>
+          <tbody>
+            <tr v-for="t in usage.tools" :key="t.tool">
+              <td class="eval-model">{{ t.tool }}</td>
+              <td>{{ t.calls }}</td>
+              <td>{{ t.errors }}</td>
+              <td :class="t.error_rate > 0.2 ? 'clr-negative' : ''">
+                {{ (t.error_rate * 100).toFixed(1) }}%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-else-if="usage" class="section-desc">窗口内没有 agent 对话记录。</p>
+    </div>
+
     <!-- Screener Semantics -->
     <div class="card section">
       <div class="section-header">
@@ -1083,6 +1131,21 @@ async function testChannel() {
   }
 }
 
+// ---- Agent 用量统计 ----
+const usage = ref(null)
+const usageDays = ref(30)
+
+async function loadUsage() {
+  try { usage.value = await api.getAgentUsage(usageDays.value) } catch { usage.value = null }
+}
+
+function fmtTokens(v) {
+  if (!v) return '0'
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M'
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K'
+  return String(v)
+}
+
 // ---- 语义档案后验审计 ----
 const auditRunning = ref(false)
 const auditResults = ref({})    // key -> {verdict, n, hit_rate, detail, ...}
@@ -1347,6 +1410,7 @@ onMounted(() => {
   loadChannels()
   loadSemantics()
   loadMemories()
+  loadUsage()
   loadEvalRuns()
   loadLogs()
 })
@@ -1675,6 +1739,11 @@ onMounted(() => {
 
 .btn-inline { font-size: 12px; padding: 1px 8px; margin-left: 8px; cursor: pointer; }
 .btn-inline.danger { color: var(--danger, #d9534f); }
+
+/* --- Agent 用量统计 --- */
+.usage-totals { margin-bottom: 14px; }
+.usage-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .usage-cols { grid-template-columns: 1fr; } }
 
 /* --- Agent 行为评测 --- */
 .eval-table { width: 100%; margin-top: 14px; font-size: 12.5px; border-collapse: collapse; }

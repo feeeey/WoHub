@@ -17,7 +17,13 @@
       <div class="kline-toolbar card">
         <div class="ctrl">
           <label>币种</label>
-          <input v-model.trim="symbol" class="symbol-input" placeholder="BTCUSDT" @keyup.enter="loadAll" />
+          <SymbolPicker
+            v-model="symbol"
+            class="symbol-input"
+            placeholder="搜索，如 BTC"
+            @select="loadAll"
+            @enter="loadAll"
+          />
         </div>
         <div class="ctrl">
           <label>周期</label>
@@ -257,7 +263,13 @@
         <div v-show="activeTab === 'history'">
           <p v-if="!histSymbol" class="hist-hint">输入币种查询历史订单</p>
           <div class="hist-toolbar">
-            <input v-model="histSymbol" placeholder="BTCUSDT" class="hist-input" @keyup.enter="loadHistory" />
+            <SymbolPicker
+              v-model="histSymbol"
+              class="hist-input"
+              placeholder="搜索，如 BTC"
+              @select="loadHistory"
+              @enter="loadHistory"
+            />
             <button class="btn btn-sm" @click="loadHistory" :disabled="!histSymbol">查询</button>
           </div>
           <table v-if="history.length">
@@ -366,6 +378,7 @@ import { createChart, CandlestickSeries, CrosshairMode } from 'lightweight-chart
 import { api } from '../api/client.js'
 import ClassificationChain from '../components/ClassificationChain.vue'
 import TradeForm from '../components/TradeForm.vue'
+import SymbolPicker from '../components/SymbolPicker.vue'
 
 const route = useRoute()
 
@@ -844,7 +857,7 @@ onUnmounted(() => {
   color: var(--text-primary); font-size: 13px;
 }
 .ctrl-spacer { flex: 1; }
-.symbol-input { width: 140px; }
+.symbol-input { width: 160px; }
 .interval-select { width: 100px; }
 .limit-input { width: 90px; }
 .refresh-select { width: 100px; }

@@ -66,6 +66,11 @@ export const api = {
     return request(`/market/compare/${encodeURIComponent(symbol)}`)
   },
 
+  // 标的列表，按 24h 成交量倒序，供搜索选择器本地过滤
+  async listSymbols(exchange = 'Binance') {
+    return request(`/market/symbols?exchange=${encodeURIComponent(exchange)}`)
+  },
+
   async exportList(exchange = 'all') {
     const res = await fetch(`${BASE}/market/export?exchange=${exchange}`)
     return res.text()
@@ -184,6 +189,30 @@ export const api = {
 
   async testChartshotCookies() {
     return request('/screenshots/cookies/test', { method: 'POST' })
+  },
+
+  async getScreenshotTimeframes() {
+    return request('/screenshots/timeframes')
+  },
+
+  // ChartShot 单 worker 串行渲染，多周期可能跑满 2 分钟——调用方要给足等待反馈
+  async captureScreenshot(data) {
+    return request('/screenshots/capture', { method: 'POST', body: JSON.stringify(data) })
+  },
+
+  async listScreenshots(params = {}) {
+    const q = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== null && v !== undefined && v !== '')
+    ).toString()
+    return request(`/screenshots${q ? '?' + q : ''}`)
+  },
+
+  async pushScreenshot(id, data) {
+    return request(`/screenshots/${id}/push`, { method: 'POST', body: JSON.stringify(data) })
+  },
+
+  async deleteScreenshot(id) {
+    return request(`/screenshots/${id}`, { method: 'DELETE' })
   },
 
   async getKlines(symbol, interval, limit = 100, includeCurrent = false) {

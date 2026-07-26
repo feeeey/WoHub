@@ -83,6 +83,95 @@
       <div v-if="chartshotMsg" class="action-msg" :class="chartshotOk ? 'msg-ok' : 'msg-fail'">
         {{ chartshotMsg }}
       </div>
+
+      <!-- 手动截图 -->
+      <div class="shot-divider"></div>
+      <p class="section-desc">
+        手动截图：输入标的即可出图，可同时推送到 Telegram / Discord 渠道。
+        ChartShot 串行渲染，多周期可能要等 1–2 分钟。
+      </p>
+      <div class="form-row shot-row">
+        <div class="form-group shot-symbol">
+          <label>标的</label>
+          <SymbolPicker
+            v-model="shotSymbol"
+            :disabled="capturing"
+            placeholder="搜索标的，如 BTC"
+            @enter="runCapture"
+          />
+        </div>
+        <div class="form-group">
+          <label>周期</label>
+          <div class="tf-picker">
+            <button
+              v-for="tf in shotTimeframeOptions"
+              :key="tf"
+              type="button"
+              class="tf-chip"
+              :class="{ active: shotTimeframes.includes(tf) }"
+              @click="toggleShotTimeframe(tf)"
+            >{{ tf }}</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group" v-if="pushChannels.length">
+        <label>推送渠道（可多选，留空则只存档）</label>
+        <div class="tf-picker">
+          <button
+            v-for="ch in pushChannels"
+            :key="ch.id"
+            type="button"
+            class="tf-chip"
+            :class="{ active: shotChannelIds.includes(ch.id) }"
+            @click="toggleShotChannel(ch.id)"
+          >{{ ch.name }} · {{ ch.type }}</button>
+        </div>
+      </div>
+      <p v-else class="section-desc shot-hint">
+        还没有 Telegram / Discord 渠道，截图只会存档。可在「推送渠道」页添加。
+      </p>
+
+      <div class="btn-row">
+        <button
+          class="btn btn-primary btn-sm"
+          @click="runCapture"
+          :disabled="capturing || !shotSymbol.trim() || !shotTimeframes.length"
+        >
+          {{ capturing ? '截图中…' : '截图' + (shotChannelIds.length ? ' 并推送' : '') }}
+        </button>
+        <button class="btn btn-sm" @click="loadRecentShots" :disabled="capturing">
+          刷新历史
+        </button>
+      </div>
+
+      <div v-if="shotMsg" class="action-msg" :class="shotOk ? 'msg-ok' : 'msg-fail'">
+        {{ shotMsg }}
+      </div>
+      <ul v-if="shotErrors.length" class="shot-errors">
+        <li v-for="(e, i) in shotErrors" :key="i">{{ e }}</li>
+      </ul>
+
+      <div v-if="recentShots.length" class="shot-gallery">
+        <figure v-for="s in recentShots" :key="s.id" class="shot-card">
+          <a :href="s.url" target="_blank" rel="noopener">
+            <img :src="s.url" :alt="s.symbol + ' ' + s.timeframe" loading="lazy" />
+          </a>
+          <figcaption>
+            <span class="shot-meta">{{ s.symbol }} · {{ s.timeframe }}</span>
+            <span class="shot-time">{{ s.created_at }}</span>
+            <span class="shot-ops">
+              <button
+                class="btn-inline"
+                @click="repush(s)"
+                :disabled="!shotChannelIds.length || capturing"
+                :title="shotChannelIds.length ? '推送到上面选中的渠道' : '先选择推送渠道'"
+              >重推</button>
+              <button class="btn-inline danger" @click="removeShot(s)">删除</button>
+            </span>
+          </figcaption>
+        </figure>
+      </div>
     </div>
 
     <!-- Proxy Configuration -->
@@ -437,6 +526,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../api/client.js'
+import SymbolPicker from '../components/SymbolPicker.vue'
 
 const info = ref({ version: '', cache_ttl: 0, min_volume_24h: 0, proxy_enabled: false })
 
@@ -605,6 +695,120 @@ async function testChartshotCookies() {
   } catch (e) {
     chartshotMsg.value = '测试失败: ' + e.message
     chartshotOk.value = false
+  }
+}
+
+// --- 手动截图 ---
+// 注意：上面的 `channels` 是 LLM 渠道，这里的 pushChannels 是通知渠道，两者无关。
+const shotSymbol = ref('')
+const shotTimeframes = ref(['1h'])
+const shotTimeframeOptions = ref(['15m', '30m', '1h', '4h', '1d'])
+const shotChannelIds = ref([])
+const pushChannels = ref([])
+const recentShots = ref([])
+const capturing = ref(false)
+const shotMsg = ref('')
+const shotOk = ref(false)
+const shotErrors = ref([])
+
+function toggleShotTimeframe(tf) {
+  const i = shotTimeframes.value.indexOf(tf)
+  if (i >= 0) shotTimeframes.value.splice(i, 1)
+  else shotTimeframes.value.push(tf)
+}
+
+function toggleShotChannel(id) {
+  const i = shotChannelIds.value.indexOf(id)
+  if (i >= 0) shotChannelIds.value.splice(i, 1)
+  else shotChannelIds.value.push(id)
+}
+
+async function loadShotTimeframes() {
+  try {
+    const res = await api.getScreenshotTimeframes()
+    if (res.timeframes?.length) shotTimeframeOptions.value = res.timeframes
+  } catch { /* 保留内置默认周期 */ }
+}
+
+async function loadPushChannels() {
+  try {
+    const all = await api.listChannels()
+    // 只有 telegram / discord 支持图片上传
+    pushChannels.value = (all || []).filter(c => c.type === 'telegram' || c.type === 'discord')
+  } catch {
+    pushChannels.value = []
+  }
+}
+
+async function loadRecentShots() {
+  try {
+    const res = await api.listScreenshots({ limit: 12 })
+    recentShots.value = res.screenshots || []
+  } catch {
+    recentShots.value = []
+  }
+}
+
+function summarizePushes(pushes) {
+  if (!pushes?.length) return ''
+  return '；' + pushes
+    .map(p => `${p.channel_name} ${p.ok ? '✓' : '✗ ' + (p.errors[0] || '失败')}`)
+    .join('，')
+}
+
+async function runCapture() {
+  capturing.value = true
+  shotMsg.value = '截图中，ChartShot 正在渲染图表…'
+  shotOk.value = true
+  shotErrors.value = []
+  try {
+    const res = await api.captureScreenshot({
+      symbol: shotSymbol.value.trim(),
+      timeframes: shotTimeframes.value,
+      channel_ids: shotChannelIds.value,
+    })
+    shotErrors.value = res.errors || []
+    if (res.ok) {
+      shotMsg.value = `${res.symbol} 已生成 ${res.shots.length} 张图` + summarizePushes(res.pushes)
+      shotOk.value = res.errors?.length ? false : true
+      await loadRecentShots()
+    } else {
+      // 后端已把失败原因放进 errors，直接透出比笼统的「截图失败」有用
+      shotMsg.value = res.errors?.[0] || '截图失败'
+      shotOk.value = false
+    }
+  } catch (e) {
+    // 409 = 定时任务占用中，属于调度让路而非故障，措辞上要区分开
+    const busy = /定时任务/.test(e.message || '')
+    shotMsg.value = busy ? `⏳ ${e.message}` : '截图失败: ' + e.message
+    shotOk.value = false
+  } finally {
+    capturing.value = false
+  }
+}
+
+async function repush(shot) {
+  shotMsg.value = '推送中…'
+  shotOk.value = true
+  shotErrors.value = []
+  try {
+    const res = await api.pushScreenshot(shot.id, { channel_ids: shotChannelIds.value })
+    shotMsg.value = `${shot.symbol} ${shot.timeframe}` + summarizePushes(res.pushes)
+    shotOk.value = res.ok
+  } catch (e) {
+    shotMsg.value = '推送失败: ' + e.message
+    shotOk.value = false
+  }
+}
+
+async function removeShot(shot) {
+  if (!confirm(`删除 ${shot.symbol} ${shot.timeframe} 的截图？文件也会一并删除。`)) return
+  try {
+    await api.deleteScreenshot(shot.id)
+    await loadRecentShots()
+  } catch (e) {
+    shotMsg.value = '删除失败: ' + e.message
+    shotOk.value = false
   }
 }
 
@@ -823,6 +1027,9 @@ onMounted(() => {
   loadInfo()
   loadPineCookies()
   loadChartshotStatus()
+  loadShotTimeframes()
+  loadPushChannels()
+  loadRecentShots()
   loadProxy()
   loadTradingCreds()
   loadAgentConfig()
@@ -1154,6 +1361,35 @@ onMounted(() => {
 }
 
 .btn-inline { font-size: 12px; padding: 1px 8px; margin-left: 8px; cursor: pointer; }
+.btn-inline.danger { color: var(--danger, #d9534f); }
+
+/* --- 手动截图 --- */
+.shot-divider { height: 1px; background: var(--border, rgba(128,128,128,.2));
+  margin: 20px 0 16px; }
+.shot-row { align-items: start; }
+.shot-hint { margin-top: -4px; }
+.tf-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.tf-chip { font-size: 12.5px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-strong, rgba(128,128,128,.3));
+  background: var(--bg-secondary, transparent); color: inherit; }
+.tf-chip:hover { border-color: var(--accent, #c86e3c); }
+.tf-chip.active { background: var(--accent-subtle, rgba(200,110,60,.2));
+  border-color: var(--accent, #c86e3c); font-weight: 600; }
+.shot-errors { margin: 10px 0 0; padding-left: 18px; font-size: 12.5px;
+  color: var(--text-secondary); }
+.shot-gallery { margin-top: 16px; display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.shot-card { margin: 0; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--border, rgba(128,128,128,.2));
+  background: var(--bg-tertiary, rgba(128,128,128,.06)); }
+.shot-card img { display: block; width: 100%; height: 124px; object-fit: cover; }
+.shot-card figcaption { padding: 7px 10px; font-size: 12px; display: flex;
+  flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.shot-meta { font-weight: 600; }
+.shot-time { color: var(--text-secondary); font-size: 11px; }
+.shot-ops { margin-left: auto; white-space: nowrap; }
+.shot-ops .btn-inline { margin-left: 0; margin-right: 2px; }
+
 .model-picker { border: 1px solid var(--border-strong, rgba(128,128,128,.3)); border-radius: 8px;
   padding: 10px 12px; margin-bottom: 14px; background: var(--bg-tertiary, rgba(128,128,128,.06)); }
 .picker-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }

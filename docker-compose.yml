@@ -13,6 +13,10 @@ services:
       - ./data:/app/data
     environment:
       - TZ=UTC
+      # executor / pine_screener 的日志走 print，不设的话会被 stdout 缓冲成批量
+      # flush，docker logs 里的时间戳全是假的（同一批相差几微秒），排障时
+      # 无法还原真实执行顺序，只能靠数据库时间戳反推
+      - PYTHONUNBUFFERED=1
       - APP_PASSWORD=${APP_PASSWORD:-admin}
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - CHARTSHOT_URL=http://chartshot:5000

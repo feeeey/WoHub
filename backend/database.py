@@ -286,6 +286,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "summary_upto" not in sess_cols:
         conn.execute("ALTER TABLE chat_sessions ADD COLUMN summary_upto INTEGER NOT NULL DEFAULT 0")
 
+    # chat_turns.push_channel_id：自动简评轮次完成后要把 assistant 文本推到的
+    # 通知渠道（普通对话轮次为 NULL）
+    turn_cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_turns)")}
+    if "push_channel_id" not in turn_cols:
+        conn.execute("ALTER TABLE chat_turns ADD COLUMN push_channel_id INTEGER")
+
     cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_config)")}
     if "vision_model" not in cols:
         conn.execute("ALTER TABLE agent_config ADD COLUMN vision_model TEXT NOT NULL DEFAULT ''")

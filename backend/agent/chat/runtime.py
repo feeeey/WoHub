@@ -417,6 +417,14 @@ def run_turn(turn_row, model_override=None) -> None:
         deps.emit("turn_done", {"message_id": mid,
                                 "input_tokens": in_tok, "output_tokens": out_tok})
         store.finish_turn(turn_id, "done")
+        # 自动简评轮次：完成后把 assistant 文本推到指定渠道（失败不影响轮次终态）
+        push_ch = turn_row["push_channel_id"] if "push_channel_id" in turn_row.keys() else None
+        if push_ch:
+            try:
+                from agent.digest import push_digest
+                push_digest(push_ch, buf.full_text())
+            except Exception as e:
+                applog("chat", "warn", f"digest push failed: {e!r}")
         try:
             _maybe_autotitle(session_id, current)
         except Exception as e:

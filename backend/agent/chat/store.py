@@ -138,12 +138,15 @@ def list_messages(session_id: int) -> list[dict]:
 
 # ---- turns（chat_turns 兼作工作队列，单 worker）----
 
-def create_turn(session_id: int, user_message_id: int) -> int:
+def create_turn(session_id: int, user_message_id: int,
+                push_channel_id: int | None = None) -> int:
+    """push_channel_id：轮次完成后把 assistant 文本推到的通知渠道（自动简评用）。"""
     db = _db()
     try:
         cur = db.execute(
-            "INSERT INTO chat_turns (session_id, user_message_id) VALUES (?, ?)",
-            (session_id, user_message_id))
+            "INSERT INTO chat_turns (session_id, user_message_id, push_channel_id) "
+            "VALUES (?, ?, ?)",
+            (session_id, user_message_id, push_channel_id))
         db.commit()
         return cur.lastrowid
     finally:

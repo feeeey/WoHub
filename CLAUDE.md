@@ -103,6 +103,18 @@ functions; execution always goes through the human-confirmed Trade page
 (`/trade?symbol=…&direction=…` prefill). Design docs:
 `docs/superpowers/specs/2026-07-04-chat-agent-design.md`.
 
+**记忆**：会话超出 20 条窗口的早期历史由主模型增量压缩进
+`chat_sessions.summary`（`summary_upto` 游标；失败降级沿用旧摘要，绝不阻塞
+轮次）；最近 2 条助手消息回灌工具证据摘要（免重复取数）；跨会话长期记忆在
+`agent_memory`（remember/forget 工具写入，全量注入 system prompt，50 条 ×
+200 字硬上限，刻意不用向量库）。Settings 有查看/删除入口。
+
+**自动简评**（`agent/digest.py`）：任务动作勾选 `agent_digest` 后，信号触发
+会在「信号简评（自动）」会话里创建一个**普通 chat 轮次**（预算/红线/trace
+全部继承），完成后把 assistant 文本推到任务渠道（`chat_turns.push_channel_id`）。
+护栏：agent 未启用跳过、同任务 `cooldown_minutes` 冷却、简评会话有排队轮次
+不堆积。这是被删掉的批量裁决层在有评测护栏后的谨慎重建。
+
 **Outcome 闭环**：`agent/outcome_stats.py` 把 signals×outcomes 按筛选器
 label 聚合成后验统计（方向盲原始收益，10 分钟 TTL 缓存），两处消费：
 system prompt 的语义档案每条附带 `↳ 近90天后验（n=…）` 行（样本 <5 显式标

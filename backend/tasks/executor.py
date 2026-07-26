@@ -188,6 +188,9 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
         cleaned = [s.replace("BINANCE:", "").replace(".P", "") for s in all_signals]
         _capture_batch(task_id, cleaned, resolutions, channel, _shot_limit(config))
 
+    if "agent_digest" in actions and all_signals:
+        _maybe_digest(task_id, message, channel)
+
 
 def _exec_market_scan(task_id, config, actions, channel):
     from sources.exchanges import fetch_all_tickers
@@ -240,6 +243,9 @@ def _exec_market_scan(task_id, config, actions, channel):
         cleaned = [sym.replace("BINANCE:", "").replace(".P", "")
                    for sym, labels in overlaps.items() if len(labels) >= shot_threshold]
         _capture_batch(task_id, cleaned, resolutions[:1], channel, _shot_limit(config))
+
+    if "agent_digest" in actions and overlaps:
+        _maybe_digest(task_id, message, channel)
 
 
 def _exec_anomaly_watch(task_id, config, actions, channel):
@@ -299,6 +305,21 @@ def _exec_anomaly_watch(task_id, config, actions, channel):
     if "chart_shot" in actions:
         _capture_batch(task_id, [m["symbol"] for m in matches],
                        resolutions[:1], channel, _shot_limit(config))
+
+    if "agent_digest" in actions and matches:
+        _maybe_digest(task_id, message, channel)
+
+
+def _maybe_digest(task_id, message, channel):
+    """AI 简评入队。所有护栏（启用检查/冷却/防堆积）在 digest 模块内，
+    这里只保证：简评的任何失败都不影响任务本体流程。"""
+    try:
+        from agent.digest import enqueue_digest
+        out = enqueue_digest(task_id, message, channel)
+        if "skipped" in out:
+            applog("agent", "info", f"任务 {task_id} 简评跳过：{out['skipped']}")
+    except Exception as e:
+        applog("agent", "error", f"任务 {task_id} 简评入队异常: {e}")
 
 
 def _exec_scheduled_shot(task_id, config, actions, channel):

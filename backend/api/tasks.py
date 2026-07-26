@@ -165,6 +165,8 @@ def delete_task(task_id: int):
         print(f"[tasks] remove_task_job failed: {e}")
     db = get_db(settings.db_path)
     # Delete in FK order: children first, then parent
+    # 先按 task_id 清截图：匹配不到信号的行 signal_id 为 NULL，只有这条能清掉它们
+    db.execute("DELETE FROM screenshots WHERE task_id = ?", (task_id,))
     signal_ids = [r["id"] for r in db.execute("SELECT id FROM signals WHERE task_id = ?", (task_id,)).fetchall()]
     if signal_ids:
         placeholders = ",".join("?" * len(signal_ids))

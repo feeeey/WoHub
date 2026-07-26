@@ -41,7 +41,8 @@ pytest -m "not network"       # Skip live API tests
 ### Key directories
 
 - `backend/api/` — FastAPI routers: health, market, channels, tasks, settings, scanner, screenshots, klines, trading
-- `backend/sources/` — Data fetching: `pine_screener.py` (TradingView), individual exchange clients (Binance, OKX, Bybit, Bitget), `chart_shot_client.py`
+- `backend/sources/` — Data fetching: `pine_screener.py` (TradingView), individual exchange clients (Binance, OKX, Bybit, Bitget)
+- `backend/screenshots/` — 截图模块：`service.py`（唯一截图入口 `capture()` + 记录查询/删除）、`dispatch.py`（多渠道推送 + push_logs）、`client.py`（ChartShot HTTP 客户端）、`pipeline.py`（任务流水线兼容封装）
 - `backend/tasks/` — `scheduler.py` (APScheduler cron/interval jobs), `executor.py` (task execution pipeline), `tracker.py` + `outcome_poller.py` (persistent signal outcome tracking at 1h/4h/24h, restart-safe)
 - `backend/agent/` — chat agent: `chat/` (store/events/runtime/worker/vision/semantics/prompts), `tools.py` (read-only, throttled), `decider.py` (RuleDecider — task-pipeline threshold logic), `config.py` (llm_channels 渠道 CRUD + 双槽位渠道解析 + Fernet key), `llm.py`, `validator.py` (stub)
 - `backend/channels/` — Notification dispatch: `telegram.py`, `discord.py`, `sender.py`
@@ -57,9 +58,32 @@ pytest -m "not network"       # Skip live API tests
 2. `executor.py` calls `pine_screener.run_screener()` for each screener x timeframe combo (rate-limited: 1 req/2 sec)
 3. `RuleDecider.decide()` (the decision seam in `backend/agent/decider.py`) applies overlap/confluence thresholds
 4. Sends results via configured channel (Telegram/Discord)
-5. Optionally captures ChartShot screenshots
+5. Optionally captures ChartShot screenshots (`chart_shot` action，不再要求配了推送渠道——没渠道时只截图存档)
 6. Persists signals, snapshots (+ due `outcome_checks`), push logs to SQLite
 7. Signals are available to the chat agent's tools (screener scan, signal history) on demand — the task pipeline itself never queues or invokes the agent
+
+### Screenshots
+
+统一入口是 `screenshots.service.capture(symbol, timeframes, task_id=…)`：归一化标的
+（`BINANCE:BTCUSDT.P` → `BTCUSDT`，非币安前缀原样保留）、校验周期、调 ChartShot、
+落库、返回结构化 shots。executor、chat agent 的 `capture_chart`、REST 接口都走它，
+所以任何来源的截图都能在列表里查到、重推、清理。
+
+推送走 `screenshots.dispatch`：`push_shots()` 逐渠道隔离失败（一张图失败不影响同渠道
+其余图，一个渠道失败不影响其他渠道），每渠道汇总写一条 push_logs；`capture_and_push()`
+是截图+推送的组合入口。Telegram / Discord 的差异在 `channels/` 层已抹平，webhook 类型
+因为没有图片上传语义会被跳过。
+
+REST：`POST /api/screenshots/capture`（同步阻塞，ChartShot 串行渲染可能耗时 1–2 分钟）、
+`GET /api/screenshots`（列表，支持 symbol/task_id/timeframe 筛选）、
+`GET /api/screenshots/file/{filename}`（文件名白名单 + 路径逃逸二次校验）、
+`POST /api/screenshots/{id}/push`（重推）、`DELETE /api/screenshots/{id}`（删行+删文件）。
+手动截图入口在 Settings 页的 ChartShot 卡片。
+
+注意 `screenshots.task_id` 有外键约束：悬空 id 会让落库失败（图已拍出来但检索不到），
+所以 API 层先校验任务存在。ChartShot 侧的 DOM 选择器和 `CHART_LAYOUT_ID` 绑定
+TradingView 页面结构，改版会静默失败（返回 ok 但少文件）——`capture()` 会把缺失的
+周期记进 `errors`。
 
 ### Chat agent
 
@@ -80,7 +104,7 @@ functions; execution always goes through the human-confirmed Trade page
 
 ### Database
 
-Single SQLite file at `data/wohub.db`. Schema defined in `backend/database.py` (SCHEMA constant, append-only — editing existing CREATE TABLE bodies is a silent no-op). Key tables: channels, tasks, signals, snapshots, outcomes, outcome_checks, push_logs, screenshots, trading_credentials, trading_orders, agent_config, agent_runs (dormant — retained to avoid migration risk, no code writes), agent_decisions (dormant), chat_sessions, chat_messages, chat_turns, chat_events, screener_semantics, llm_channels.
+Single SQLite file at `data/wohub.db`. Schema defined in `backend/database.py` (SCHEMA constant, append-only — editing existing CREATE TABLE bodies is a silent no-op). Key tables: channels, tasks, signals, snapshots, outcomes, outcome_checks, push_logs, screenshots (task_id 由 `_migrate()` 补加——只按 signal_id 级联删除会漏掉匹配不到信号的行), trading_credentials, trading_orders, agent_config, agent_runs (dormant — retained to avoid migration risk, no code writes), agent_decisions (dormant), chat_sessions, chat_messages, chat_turns, chat_events, screener_semantics, llm_channels.
 
 ### Auth
 

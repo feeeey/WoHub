@@ -38,6 +38,10 @@ def execute_task(task_id, resolution=None):
         ch_row = db.execute("SELECT * FROM channels WHERE id = ?", (channel_id,)).fetchone()
         if ch_row:
             channel = {
+                # id 必须带上：_log_push 用它写 push_logs.channel_id，
+                # 缺了会让渠道历史页查不到任何任务推送记录
+                "id": ch_row["id"],
+                "name": ch_row["name"],
                 "type": ch_row["type"],
                 "config": json.loads(ch_row["config_json"]),
             }
@@ -135,7 +139,8 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
                for sym, labels in sigs.items() for label in labels]
     _record_signals(task_id, entries)
 
-    if "chart_shot" in actions and channel:
+    # 不再要求 channel 存在：没配推送渠道时仍截图存档，供 UI / agent 事后调阅
+    if "chart_shot" in actions:
         for sym in list(all_signals.keys())[:3]:
             clean = sym.replace("BINANCE:", "").replace(".P", "")
             capture_and_dispatch(task_id, clean, resolutions, channel)
@@ -185,7 +190,7 @@ def _exec_market_scan(task_id, config, actions, channel):
                for r in all_results for sym in r["symbols"] if sym in overlaps]
     _record_signals(task_id, entries)
 
-    if "chart_shot" in actions and channel and overlaps:
+    if "chart_shot" in actions and overlaps:
         shot_threshold = config.get("screenshot_threshold", 3)
         for sym in list(overlaps.keys()):
             if len(overlaps[sym]) >= shot_threshold:
@@ -246,7 +251,8 @@ def _exec_anomaly_watch(task_id, config, actions, channel):
         _send_push(channel, message)
         _log_push(task_id, channel, message)
 
-    if "chart_shot" in actions and channel:
+    # 不再要求 channel 存在：没配推送渠道时仍截图存档，供 UI / agent 事后调阅
+    if "chart_shot" in actions:
         for m in matches[:3]:
             capture_and_dispatch(task_id, m["symbol"], resolutions[:1], channel)
 

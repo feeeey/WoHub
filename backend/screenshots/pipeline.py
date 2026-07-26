@@ -1,88 +1,35 @@
-import os
+"""任务流水线用的截图入口 —— service + dispatch 的薄封装。
+
+保留 capture_and_dispatch 这个名字和签名是为了 executor 的四个调用点不必改写；
+实际逻辑已经下沉到 screenshots.service（截图+落库）和 screenshots.dispatch（推送）。
+"""
 
 from app_logger import log as applog
-from channels.sender import send_photo
-from config import settings
-from database import get_db
-from screenshots.client import chartshot_client
+from screenshots import dispatch, service
 
 
-def capture_and_dispatch(task_id, symbol, timeframes, channel):
-    """Capture screenshot(s) via ChartShot, push them to channel, persist to DB.
+def capture_and_dispatch(task_id, symbol, timeframes, channel=None):
+    """截图并（若给了渠道）推送。返回 service.capture 的结果 dict。
 
-    Silent on failure: each step logs to app_logger and continues with the next file.
+    channel 为 None 时只截图存档 —— 这是有意支持的：任务没配推送渠道
+    不该导致完全不截图。
     """
     try:
-        result = chartshot_client.screenshot(symbol, timeframes)
-    except Exception as e:
-        applog("screenshots", "error", f"Screenshot request failed for {symbol}: {e}")
-        return
+        # source="task"：定时任务享有 ChartShot 队列优先权，手动截图会为它让路
+        result = service.capture(symbol, timeframes, task_id=task_id, source="task")
+    except ValueError as e:
+        applog("screenshots", "error", f"截图参数非法 {symbol} {timeframes}: {e}")
+        return {"ok": False, "symbol": symbol, "timeframes": list(timeframes or []),
+                "shots": [], "errors": [str(e)], "pushes": []}
 
-    if not result.get("ok"):
-        applog("screenshots", "error", f"Screenshot failed for {symbol}: {result.get('error', 'unknown')}")
-        return
-
-    files = result.get("files") or []
-    if not files:
-        return
-
-    for filename in files:
-        tf = _parse_tf_from_filename(filename, timeframes)
-        local_path = os.path.join(settings.screenshots_dir, filename)
-
-        if not os.path.isfile(local_path):
-            applog("screenshots", "error", f"Screenshot file not accessible at {local_path}")
-            continue
-
-        if channel:
-            try:
-                send_photo(channel["type"], channel["config"], local_path, caption=f"📸 {symbol} {tf}")
-            except Exception as e:
-                applog("screenshots", "error", f"send_photo failed for {symbol} {tf}: {e}")
-
-        _record_screenshot(task_id, symbol, tf, local_path)
+    if channel and result["shots"]:
+        result["pushes"] = dispatch.push_shots(
+            result["shots"], [channel], task_id=task_id)
+    else:
+        result["pushes"] = []
+    return result
 
 
 def get_screenshot_for_signal(signal_id):
-    """Return absolute file_path of the most recent screenshot for this signal, or None."""
-    try:
-        db = get_db(settings.db_path)
-        row = db.execute(
-            "SELECT file_path FROM screenshots WHERE signal_id = ? ORDER BY created_at DESC LIMIT 1",
-            (signal_id,),
-        ).fetchone()
-        db.close()
-        return row["file_path"] if row else None
-    except Exception as e:
-        applog("screenshots", "error", f"Failed to read screenshot for signal {signal_id}: {e}")
-        return None
-
-
-def _parse_tf_from_filename(filename, candidates):
-    """Extract timeframe from filename like '{symbol}_{tf}_{timestamp}.png'."""
-    name = filename.rsplit(".", 1)[0]
-    for part in name.split("_"):
-        if part in candidates:
-            return part
-    return candidates[0] if candidates else "?"
-
-
-def _record_screenshot(task_id, symbol, timeframe, file_path):
-    """Persist screenshot row, linked to the latest matching signal if any."""
-    try:
-        db = get_db(settings.db_path)
-        sig = db.execute(
-            "SELECT id FROM signals WHERE task_id = ? AND symbol = ? AND timeframe = ? "
-            "ORDER BY triggered_at DESC LIMIT 1",
-            (task_id, symbol, timeframe),
-        ).fetchone()
-        signal_id = sig["id"] if sig else None
-        db.execute(
-            "INSERT INTO screenshots (signal_id, symbol, timeframe, file_path) "
-            "VALUES (?, ?, ?, ?)",
-            (signal_id, symbol, timeframe, file_path),
-        )
-        db.commit()
-        db.close()
-    except Exception as e:
-        applog("screenshots", "error", f"Failed to record screenshot: {e}")
+    """该信号最近一张截图的绝对路径，无则 None。"""
+    return service.get_screenshot_for_signal(signal_id)

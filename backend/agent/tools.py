@@ -252,15 +252,17 @@ def run_screener_scan(screener_keys: list[str], timeframes: list[str],
 
 def capture_chart(symbol: str, interval: str) -> dict:
     """ChartShot 截取 TradingView 实时图表（含用户配置的指标模板）。
-    返回文件名列表；文件已落在 settings.screenshots_dir。"""
-    from screenshots.client import chartshot_client
-    res = chartshot_client.screenshot(symbol, [interval])
-    if not res.get("ok"):
-        return {"error": f"截图失败: {res.get('error', 'unknown')}（可能 ChartShot 未运行或 cookie 过期）"}
-    files = res.get("files") or []
-    if not files:
-        return {"error": "截图服务未返回文件"}
-    return {"files": files}
+    返回文件名列表；文件已落在 settings.screenshots_dir 并登记到 screenshots 表
+    （走统一服务层，agent 截的图同样能在截图列表里查到、重推、清理）。"""
+    from screenshots import service
+    try:
+        res = service.capture(symbol, [interval])
+    except ValueError as e:
+        return {"error": str(e)}
+    if not res["shots"]:
+        detail = "；".join(res["errors"]) or "unknown"
+        return {"error": f"截图失败: {detail}（可能 ChartShot 未运行或 cookie 过期）"}
+    return {"files": [s["filename"] for s in res["shots"]]}
 
 
 def account_overview(credential_id: int) -> dict:

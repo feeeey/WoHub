@@ -241,6 +241,20 @@ CREATE TABLE IF NOT EXISTS llm_channels (
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent column additions for tables that already exist in deployed DBs.
     (SCHEMA 是 append-only：改已存在的 CREATE TABLE 体是静默 no-op。)"""
+    # screenshots.task_id：早期只记 signal_id，匹配不到信号的截图（如异动监控、
+    # 手动截图）会同时留下 NULL signal_id 和无归属行，任务删除时永远清理不掉。
+    shot_cols = {r[1] for r in conn.execute("PRAGMA table_info(screenshots)")}
+    if "task_id" not in shot_cols:
+        conn.execute("ALTER TABLE screenshots ADD COLUMN task_id INTEGER REFERENCES tasks(id)")
+        # 回填：历史行经 signal 反查所属任务
+        conn.execute("UPDATE screenshots SET task_id = ("
+                     "SELECT s.task_id FROM signals s WHERE s.id = screenshots.signal_id) "
+                     "WHERE task_id IS NULL AND signal_id IS NOT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_screenshots_task "
+                 "ON screenshots(task_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_screenshots_symbol "
+                 "ON screenshots(symbol, created_at)")
+
     cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_config)")}
     if "vision_model" not in cols:
         conn.execute("ALTER TABLE agent_config ADD COLUMN vision_model TEXT NOT NULL DEFAULT ''")

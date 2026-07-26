@@ -35,3 +35,10 @@ PER_TF_BUDGET = 100
 CAPTURE_BASE_OVERHEAD = 30
 # 单页导航超时
 NAV_TIMEOUT = 45
+# 浏览器启动超时。Playwright 默认无上界，Chromium 卡住会永久阻塞单 worker
+LAUNCH_TIMEOUT = 60
+# 其余 Playwright 动作（click / evaluate / download）的兜底超时
+ACTION_TIMEOUT = 30
+# 一个 job 占用 worker 超过这个时长即视为卡死：不再让它挡住手动截图。
+# 取值需大于最坏合法耗时（CAPTURE_BASE_OVERHEAD + PER_TF_BUDGET × 周期数）
+STALE_JOB_SECONDS = 600

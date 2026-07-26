@@ -7,10 +7,18 @@ from config import (
     OUTPUT_DIR, CHART_LAYOUT_ID, TIMEFRAME_MAP,
     SYMBOL_EXCHANGE_MAP, MAX_RETRIES, RETRY_BACKOFF,
     INDICATOR_WAIT_TIMEOUT, PER_TF_BUDGET, NAV_TIMEOUT,
+    LAUNCH_TIMEOUT, ACTION_TIMEOUT,
 )
 from cookies_manager import load_cookies, load_headers
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+def _quiet_close(fn):
+    try:
+        fn()
+    except Exception as e:
+        print(f"[cleanup] {fn.__qualname__} failed: {e}")
 
 
 def build_chart_url(symbol, timeframe=None):
@@ -128,12 +136,17 @@ def capture_chart(symbol, timeframes, headless=True):
     results = []
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=headless)
+        # launch 默认无超时：Chromium 起不来就永久阻塞 worker，job 走不到 finally，
+        # 队列雪崩且 task_inflight 永不归零。所有阻塞操作都必须有上界。
+        browser = pw.chromium.launch(headless=headless, timeout=LAUNCH_TIMEOUT * 1000)
         context = browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent=headers.get("user-agent", "Mozilla/5.0"),
             locale="zh-CN",
         )
+        # 兜底所有未显式传 timeout 的操作（click / evaluate / expect_download 等）
+        context.set_default_timeout(ACTION_TIMEOUT * 1000)
+        context.set_default_navigation_timeout(NAV_TIMEOUT * 1000)
         context.add_cookies(cookies)
 
         # 严格串行：一次只开一个图表页，截完立刻关。
@@ -178,9 +191,10 @@ def capture_chart(symbol, timeframes, headless=True):
                 # 单周期失败不影响其余周期
                 print(f"[{symbol}|{tf}] Screenshot failed: {e}")
             finally:
-                page.close()
+                _quiet_close(page.close)
 
-        context.close()
-        browser.close()
+        # 收尾同样可能卡住，卡了也不能让 job 悬着——浏览器进程有 init 兜底回收
+        _quiet_close(context.close)
+        _quiet_close(browser.close)
 
     return results

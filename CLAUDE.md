@@ -101,7 +101,9 @@ own channel (`vision_channel_id`, NULL = follow main channel). Red lines:
 `backend/agent/` never imports order-placing
 functions; execution always goes through the human-confirmed Trade page
 (`/trade?symbol=…&direction=…` prefill). Design docs:
-`docs/superpowers/specs/2026-07-04-chat-agent-design.md`.
+`docs/superpowers/specs/2026-07-04-chat-agent-design.md`；测量与学习升级
+（评测/闭环/记忆/审计/观测/简评）的完整复盘：
+`docs/superpowers/specs/2026-07-26-agent-measurement-upgrade.md`.
 
 **记忆**：会话超出 20 条窗口的早期历史由主模型增量压缩进
 `chat_sessions.summary`（`summary_upto` 游标；失败降级沿用旧摘要，绝不阻塞

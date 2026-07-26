@@ -23,8 +23,19 @@ FLUSH_CHARS = 400
 RESULT_TRUNC = 2000         # 工具结果截断（trace 与事件摘要）
 MODEL_RESULT_CAP = 24000    # 模型侧兜底：防病态大结果撑爆上下文；正常工具输出（如 300 根K线）不受影响
 
+# 单轮墙钟上限。worker 是单线程串行 drain，一轮卡住就等于整个 agent 停摆：
+# 之后所有轮次（含自动简评）无限排队，且没有任何告警。取消检查点只在流式
+# 数据块之间——模型挂起不发块时永远不会被检查到，所以必须有外层超时。
+# 上限要能容纳正常的长轮次：max_tool_calls 次模型往返 + 截图（约 10s/张）+
+# 视觉分析，取 15 分钟。
+TURN_TIMEOUT_S = 900
+
 
 class TurnCancelled(Exception):
+    pass
+
+
+class TurnTimeout(Exception):
     pass
 
 
@@ -328,6 +339,17 @@ def _build_prompt(session_id: int, user_message_id: int, cfg, deps: ChatDeps,
     return parts, current
 
 
+async def _drive_with_timeout(agent: Agent, prompt: str, deps: ChatDeps, cfg,
+                              buf: _DeltaBuffer, timeout_s: float):
+    """整轮墙钟上限。超时把已流出的文本留在 buf 里（收尾时照常落库），
+    再抛 TurnTimeout 交给失败路径——绝不能让轮次悬在 running。"""
+    try:
+        return await asyncio.wait_for(_drive(agent, prompt, deps, cfg, buf),
+                                      timeout=timeout_s)
+    except asyncio.TimeoutError:
+        raise TurnTimeout(f"轮次超过 {int(timeout_s)} 秒上限，已中止")
+
+
 async def _drive(agent: Agent, prompt: str, deps: ChatDeps, cfg, buf: _DeltaBuffer):
     async with agent.iter(prompt, deps=deps,
                           usage_limits=UsageLimits(
@@ -406,7 +428,8 @@ def run_turn(turn_row, model_override=None) -> None:
         prompt, current = _build_prompt(session_id, turn_row["user_message_id"],
                                         cfg, deps, model=model)
         agent = _build_agent(cfg, model)
-        run = asyncio.run(_drive(agent, prompt, deps, cfg, buf))
+        run = asyncio.run(_drive_with_timeout(agent, prompt, deps, cfg, buf,
+                                              TURN_TIMEOUT_S))
         buf.flush()
         in_tok, out_tok = _usage_tokens(run)
         mid = store.add_message(session_id, "assistant", buf.full_text(),
@@ -431,6 +454,9 @@ def run_turn(turn_row, model_override=None) -> None:
             applog("chat", "warn", f"autotitle failed: {e!r}")
     except TurnCancelled:
         _finalize_abnormal(deps, buf, session_id, turn_id, "cancelled", None)
+    except TurnTimeout as e:
+        applog("chat", "error", f"turn #{turn_id} timed out: {e}")
+        _finalize_abnormal(deps, buf, session_id, turn_id, "failed", str(e))
     except Exception as e:
         applog("chat", "error", f"turn #{turn_id} failed: {e!r}")
         _finalize_abnormal(deps, buf, session_id, turn_id, "failed", str(e)[:2000])

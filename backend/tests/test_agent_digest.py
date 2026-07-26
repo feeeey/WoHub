@@ -74,6 +74,39 @@ def test_cooldown_suppresses_same_task():
     assert "queued" in digest.enqueue_digest(_make_task("另一个"), "信号", ch)
 
 
+def test_cooldown_does_not_leak_across_task_id_prefixes():
+    """任务 #1 的冷却查询不能被任务 #12 的记录命中。
+
+    冷却用 content LIKE 查历史触发消息；早期模式是 '任务#1%'，会匹配到
+    '任务#12《…》'，导致低编号任务的简评被静默跳过——静默正是最难发现的
+    故障形态。"""
+    save_config_with_channel(cooldown_minutes=240)
+    ch = _make_channel()
+    tids = [_make_task(f"任务{i}") for i in range(1, 13)]
+    first, twelfth = tids[0], tids[11]
+    assert str(twelfth).startswith(str(first)), "本用例需要 #N 与 #N* 的前缀关系"
+
+    # 只有 #12 触发过简评
+    assert "queued" in digest.enqueue_digest(twelfth, "十二号信号", ch)
+    row = store.claim_next_turn()
+    store.finish_turn(row["id"], "done")
+
+    # #1 从未触发过，不该被判为冷却中
+    out = digest.enqueue_digest(first, "一号信号", ch)
+    assert "queued" in out, f"任务 #{first} 被任务 #{twelfth} 的记录误判冷却：{out}"
+
+
+def test_cooldown_matches_task_name_wildcards_literally():
+    """任务名里的 % / _ 不能被当成 LIKE 通配符。"""
+    save_config_with_channel(cooldown_minutes=240)
+    ch = _make_channel()
+    tid = _make_task("涨幅%监控_A")
+    assert "queued" in digest.enqueue_digest(tid, "信号", ch)
+    row = store.claim_next_turn()
+    store.finish_turn(row["id"], "done")
+    assert "冷却" in digest.enqueue_digest(tid, "再次", ch)["skipped"]
+
+
 def test_no_pileup_when_turn_pending():
     save_config_with_channel(cooldown_minutes=0)
     ch = _make_channel()

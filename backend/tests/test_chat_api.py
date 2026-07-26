@@ -1,6 +1,8 @@
 import asyncio
 import os
+import time
 import pytest
+from unittest.mock import patch
 from agent.chat import store, events
 
 PNG_1PX = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -126,3 +128,36 @@ async def test_multifile_partial_failure_writes_nothing(client):
                                 ("files", ("b.png", big, "image/png"))])
         assert r.status_code == 413
     assert _count() == before          # 第一张合法图片也不能落盘（两阶段保证）
+
+
+@pytest.mark.asyncio
+async def test_sse_does_not_block_the_event_loop(client):
+    """SSE 是 async 路由，同步 sqlite 查询必须走线程池。
+
+    get_db 的 busy timeout 是 10 秒：chat worker 正在写事件时读连接一旦撞锁，
+    直接在事件循环里调用会把整个进程冻住十秒，所有请求一起卡死。
+    这里在请求进行期间数心跳：走线程池心跳照常推进，直接调则一次都跑不动。
+    """
+    from agent.chat import events as ev
+
+    QUERY_S, TICK_S = 0.30, 0.02
+    ticks = 0
+
+    def slow_query(sid, after, limit=500):
+        time.sleep(QUERY_S)          # 模拟撞上写锁
+        return []
+
+    async def heartbeat():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(TICK_S)
+            ticks += 1
+
+    with patch.object(ev, "events_after", slow_query):
+        async with client as c:
+            beat = asyncio.create_task(heartbeat())
+            await c.get("/api/chat/sessions/1/stream?once=true")
+            beat.cancel()
+
+    # 走线程池时心跳能跑 ~15 次；被阻塞时基本为 0
+    assert ticks >= 5, f"事件循环被同步查询占住了（期间只推进 {ticks} 次心跳）"

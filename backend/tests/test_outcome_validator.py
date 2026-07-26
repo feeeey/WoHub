@@ -1,3 +1,4 @@
+import pytest
 from agent.validator import NullValidator, OutcomeValidator, _binom_two_sided
 from config import settings
 from database import get_db
@@ -73,7 +74,8 @@ def test_insufficient_samples_refused():
     v = OutcomeValidator(min_samples=30)
     report = v.validate({"name": "t", "rules": [{"label": "新信号", "bias": "long"}]})
     assert report.verdict == "not_validated"
-    assert "样本不足" in report.metrics["rules"][0]["detail"]
+    detail = report.metrics["rules"][0]["detail"]
+    assert "独立时段不足" in detail and "拒绝背书" in detail
 
 
 def test_bonferroni_across_rules():
@@ -94,6 +96,84 @@ def test_bonferroni_across_rules():
         {"label": "边界多头2", "bias": "long"}]})
     assert both.verdict == "fail"
     assert all("不显著" in r["detail"] for r in both.metrics["rules"])
+
+
+# ---- 时间簇：自相关信号不得被当成独立试验 --------------------------------
+
+def _seed_batches(label, batches, per_batch, minutes_apart=1):
+    """模拟真实触发形态：每批扫描在同一时刻命中多个相关标的，整批同涨同跌。
+
+    批间隔 24h（远大于 4h 桶宽）保证每批各成一簇；批内相隔几分钟，落进同一簇。
+    """
+    db = get_db(settings.db_path)
+    try:
+        for b, direction in enumerate(batches):
+            for j in range(per_batch):
+                cur = db.execute(
+                    "INSERT INTO signals (symbol, exchange, indicator, timeframe, triggered_at) "
+                    "VALUES (?, 'Binance', ?, '1h', datetime('now', ?, ?))",
+                    (f"SYM{j}USDT", label,
+                     f"-{(len(batches) - b) * 24} hours",
+                     f"+{j * minutes_apart} minutes"))
+                db.execute("INSERT INTO outcomes (signal_id, change_4h) VALUES (?, ?)",
+                           (cur.lastrowid, direction))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_cluster_collapses_one_scan_into_one_trial():
+    rows = [("2026-01-01 00:00:00", 1.0), ("2026-01-01 00:01:00", 1.0),
+            ("2026-01-01 00:02:00", 3.0),           # 同一个 4h 桶
+            ("2026-01-01 09:00:00", -1.0)]          # 另一个桶
+    clusters = OutcomeValidator.cluster(rows, "4h")
+    assert clusters == [pytest.approx(5 / 3), -1.0]
+
+
+def test_cluster_width_follows_horizon():
+    rows = [("2026-01-01 00:00:00", 1.0), ("2026-01-01 02:00:00", 1.0)]
+    assert len(OutcomeValidator.cluster(rows, "1h")) == 2    # 相隔 2h：两个桶
+    assert len(OutcomeValidator.cluster(rows, "4h")) == 1    # 同一个 4h 桶
+
+
+def test_unparseable_timestamp_is_not_merged():
+    rows = [("garbage-a", 1.0), ("garbage-b", -1.0)]
+    assert len(OutcomeValidator.cluster(rows, "4h")) == 2
+
+
+def test_correlated_batch_hits_cannot_manufacture_significance():
+    """核心回归：40 批扫描 × 每批 30 个相关标的，24 批涨 16 批跌（60%）。
+
+    同一份数据，两种算法天差地别：
+    - 按原始信号行算 n=1200、k=720 → p=4.4e-12，会被判「压倒性显著」；
+    - 按独立时段算 n=40、k=24     → p=0.268，正确地判为不显著。
+    每折都放 8 个上涨批，使分段检查通过，让判决单独取决于显著性。
+    """
+    fold = [1.0] * 8 + [-1.0] * 5
+    batches = fold + fold + ([1.0] * 8 + [-1.0] * 6)      # 13+13+14 = 40 批
+    assert len(batches) == 40 and batches.count(1.0) == 24
+    _seed_batches("批量信号", batches, per_batch=30)
+
+    v = OutcomeValidator(min_samples=30, folds=3)
+    report = v.validate({"name": "t", "rules": [{"label": "批量信号", "bias": "long"}]})
+    r = report.metrics["rules"][0]
+
+    assert r["n_rows"] == 1200, "原始信号数照实记录"
+    assert r["n"] == 40, f"应聚合成 40 个独立时段，实得 {r['n']}"
+    assert all(fr > 0.5 for fr in r["fold_hit_rates"]), "分段应通过，判决只看显著性"
+    assert r["p_value"] > 0.05, f"聚合后不应显著，实得 p={r['p_value']}"
+    assert report.verdict == "fail"
+    assert "不显著" in r["detail"]
+
+    # 反证：同一批数据按原始行计数会得出完全相反的结论
+    assert _binom_two_sided(r["n_rows"], 720) < 1e-9
+
+
+def test_zero_change_is_not_counted_as_a_hit():
+    """change==0 保守地两个方向都不算命中，且检验分母与 hit_rate 一致。"""
+    rows = [("2026-01-0%d 00:00:00" % d, 0.0) for d in range(1, 10)]
+    clusters = OutcomeValidator.cluster(rows, "24h")
+    assert clusters == [0.0] * 9
 
 
 def test_bad_spec_inputs():

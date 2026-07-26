@@ -112,3 +112,62 @@ async def test_models_empty_api_key_overrides_stored_key(client):
     async with client as c:
         r = await c.post("/api/agent/models", json={"channel_id": cid, "api_key": ""})
     assert r.status_code == 400
+
+
+# ---- 已存密钥不得被发往任意地址 ------------------------------------------
+
+@pytest.mark.asyncio
+async def test_stored_key_is_never_sent_to_an_arbitrary_base_url(client):
+    """`{"channel_id": N, "base_url": "http://攻击者"}` 曾能让服务端带着解密后的
+    密钥去连任意 URL —— 凭据外泄 + 打进内网的 SSRF 跳板。"""
+    cid = save_config_with_channel(channel_base_url="https://openrouter.ai/api/v1",
+                                   channel_api_key="sk-secret")
+
+    with patch("api.agent.requests.get") as g:
+        async with client as c:
+            r = await c.post("/api/agent/models",
+                             json={"channel_id": cid, "base_url": "http://attacker.test/v1"})
+    assert r.status_code == 400
+    assert "API Key" in r.json()["detail"]
+    g.assert_not_called(), "任何出站请求都不该发生"
+
+
+@pytest.mark.asyncio
+async def test_other_base_url_allowed_when_caller_supplies_own_key(client):
+    """给了自己的 Key 就随便测——泄漏的是调用方自己的凭据。"""
+    cid = save_config_with_channel(channel_base_url="https://openrouter.ai/api/v1",
+                                   channel_api_key="sk-secret")
+
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"data": [{"id": "m1"}]}
+
+    with patch("api.agent.requests.get", return_value=FakeResp()) as g:
+        async with client as c:
+            r = await c.post("/api/agent/models",
+                             json={"channel_id": cid, "base_url": "https://other.test/v1",
+                                   "api_key": "sk-mine"})
+    assert r.status_code == 200
+    assert g.call_args.args[0] == "https://other.test/v1/models"
+    assert g.call_args.kwargs["headers"]["Authorization"] == "Bearer sk-mine"
+
+
+@pytest.mark.asyncio
+async def test_same_base_url_still_uses_stored_key(client):
+    """显式传入与已存渠道相同的 base_url 属于正常用法，不该被拦。"""
+    cid = save_config_with_channel(channel_base_url="https://openrouter.ai/api/v1",
+                                   channel_api_key="sk-secret")
+
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"data": [{"id": "m1"}]}
+
+    with patch("api.agent.requests.get", return_value=FakeResp()) as g:
+        async with client as c:
+            r = await c.post("/api/agent/models",
+                             json={"channel_id": cid,
+                                   "base_url": "https://openrouter.ai/api/v1"})
+    assert r.status_code == 200
+    assert g.call_args.kwargs["headers"]["Authorization"] == "Bearer sk-secret"

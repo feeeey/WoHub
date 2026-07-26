@@ -6,6 +6,7 @@ import time
 import uuid
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, FileResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from typing import Optional
 
@@ -127,7 +128,11 @@ async def stream(sid: int, after: int = 0, once: bool = False):
         last = after
         last_beat = time.monotonic()
         while True:
-            rows = events.events_after(sid, last)
+            # 必须走线程池：这是 async 路由，直接调同步 sqlite 会阻塞事件循环。
+            # 每 150ms 一次、每个客户端一条流，平时每次不到 1ms 看似无害；但
+            # get_db 的 busy timeout 是 10 秒，一旦 chat worker 正在写事件而读连接
+            # 撞上锁，整个进程的事件循环会被冻住十秒——所有请求一起卡死。
+            rows = await run_in_threadpool(events.events_after, sid, last)
             for r in rows:
                 last = r["id"]
                 payload = json.dumps(r["payload"], ensure_ascii=False)

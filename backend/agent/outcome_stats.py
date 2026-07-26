@@ -13,12 +13,14 @@ import threading
 import time
 from statistics import mean
 
+from agent.validator import OutcomeValidator
 from config import settings
 from database import get_db
 
 HORIZONS = ("1h", "4h", "24h")
 DEFAULT_WINDOW_DAYS = 90
 MIN_SAMPLES = 5          # 样本低于此数不给统计值，防止 n=2 的占比被当成证据
+MIN_PERIODS_FOR_CONFIDENCE = 10   # 独立时段少于此数，占比再漂亮也要标注脆弱
 _CACHE_TTL = 600         # prompt 每轮都会构建，聚合查询不必每次都跑
 
 _lock = threading.Lock()
@@ -48,6 +50,7 @@ def get_stats(days: int = DEFAULT_WINDOW_DAYS) -> dict:
             """SELECT CASE WHEN instr(s.indicator, '(') > 0
                            THEN substr(s.indicator, 1, instr(s.indicator, '(') - 1)
                            ELSE s.indicator END AS label,
+                      s.triggered_at,
                       o.change_1h, o.change_4h, o.change_24h
                FROM signals s LEFT JOIN outcomes o ON o.signal_id = s.id
                WHERE s.triggered_at >= datetime('now', ?)""",
@@ -63,8 +66,14 @@ def get_stats(days: int = DEFAULT_WINDOW_DAYS) -> dict:
     for label, sigs in grouped.items():
         entry = {"n": len(sigs)}
         for h in HORIZONS:
-            vals = [r[f"change_{h}"] for r in sigs if r[f"change_{h}"] is not None]
-            stat = {"tracked": len(vals), "up_rate": None, "avg_change": None}
+            pairs = [(r["triggered_at"], r[f"change_{h}"]) for r in sigs
+                     if r[f"change_{h}"] is not None]
+            vals = [c for _, c in pairs]
+            # 独立时段数：一次扫描会在几十个相关标的上同时命中，这些不是几十次
+            # 独立观测。tracked 是原始条数，periods 才是证据的真实体量。
+            periods = len(OutcomeValidator.cluster(pairs, h)) if pairs else 0
+            stat = {"tracked": len(vals), "periods": periods,
+                    "up_rate": None, "avg_change": None}
             if len(vals) >= MIN_SAMPLES:
                 stat["up_rate"] = round(sum(1 for v in vals if v > 0) / len(vals), 4)
                 stat["avg_change"] = round(mean(vals), 4)
@@ -88,5 +97,10 @@ def format_stats_line(label: str, stats: dict) -> str | None:
             if entry["n"] else None
     ups = " · ".join(f"{h} {entry[h]['up_rate'] * 100:.1f}%" for h in usable)
     avgs = " · ".join(f"{entry[h]['avg_change']:+.2f}%" for h in usable)
-    return (f"近{DEFAULT_WINDOW_DAYS}天后验（n={entry['n']}）："
+    # 独立时段数一并给出：同一次扫描命中的几十个相关标的只算一段行情，
+    # 不标出来会让模型（和人）把 n=800 读成 800 次独立验证。
+    periods = max(entry[h]["periods"] for h in usable)
+    caution = "，独立时段偏少，结论脆弱" if periods < MIN_PERIODS_FOR_CONFIDENCE else ""
+    return (f"近{DEFAULT_WINDOW_DAYS}天后验（n={entry['n']} 条 / "
+            f"{periods} 个独立时段{caution}）："
             f"上涨占比 {ups}；平均涨跌 {avgs}")

@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -182,7 +183,11 @@ def capture_chart(symbol, timeframes, headless=True):
                 tmp_path = Path(OUTPUT_DIR) / tmp_name
                 _click_screenshot_and_download(page, tmp_path)
 
-                final_name = f"{symbol}_{tf}_{ts}.png"
+                # 带交易所前缀的标的（SSE:000001、CME_MINI:NQ1!）含 : 和 !，
+                # 后端文件名白名单只放行 [A-Za-z0-9._-] —— 不清洗的话图片
+                # 落盘成功但永远取不出来（GET /file 400）
+                safe_symbol = re.sub(r"[^A-Za-z0-9._-]", "-", symbol)
+                final_name = f"{safe_symbol}_{tf}_{ts}.png"
                 final_path = Path(OUTPUT_DIR) / final_name
                 tmp_path.rename(final_path)
                 results.append(str(final_path))

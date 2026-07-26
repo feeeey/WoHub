@@ -1,10 +1,17 @@
+import json
+import os
 import queue
+import signal
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from config import STALE_JOB_SECONDS
+from config import (STALE_JOB_SECONDS, SUBPROC_KILL_GRACE,
+                    CAPTURE_BASE_OVERHEAD, PER_TF_BUDGET)
 
 
 @dataclass
@@ -82,9 +89,54 @@ class CaptureWorker:
                     "running_for": running_for,
                     "stale": self._stale_locked()}
 
-    def _run(self):
-        from screenshot import capture_chart
+    def _capture_in_subprocess(self, job: CaptureJob):
+        """在独立进程组里执行截图，超预算 SIGKILL 整棵树（含 Chromium）。
 
+        同步 Playwright 存在不受 action/navigation 超时管辖的调用
+        （download.save_as 等），线程内超时防不住全部挂死路径——
+        两次生产事故（各挂 2~4 小时、堵死整个队列）之后，进程级
+        硬杀是唯一可证明收敛的兜底。
+        """
+        deadline = (CAPTURE_BASE_OVERHEAD + PER_TF_BUDGET * len(job.timeframes)
+                    + SUBPROC_KILL_GRACE)
+        fd, out_path = tempfile.mkstemp(suffix=".json", prefix="capture-")
+        os.close(fd)
+        here = os.path.dirname(os.path.abspath(__file__))
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join(here, "capture_worker.py"), out_path],
+            stdin=subprocess.PIPE, text=True, cwd=here,
+            start_new_session=True)          # 独立进程组：killpg 能带走 Chromium
+        try:
+            proc.communicate(json.dumps({"symbol": job.symbol,
+                                         "timeframes": job.timeframes}),
+                             timeout=deadline)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            proc.wait()
+            job.error = f"截图子进程超时（>{deadline}s），已强杀进程树"
+            print(f"[worker] KILLED {job.symbol}: exceeded {deadline}s")
+            return
+        finally:
+            try:
+                with open(out_path, encoding="utf-8") as f:
+                    result = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                result = None
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+        if result is None:
+            job.error = job.error or f"截图子进程异常退出（exit {proc.returncode}）"
+        elif result.get("error"):
+            job.error = result["error"]
+        else:
+            job.result = result.get("paths") or []
+
+    def _run(self):
         while self._running:
             try:
                 job = self._queue.get(timeout=1)
@@ -98,8 +150,7 @@ class CaptureWorker:
                 self._active_since = time.time()
             started = time.time()
             try:
-                paths = capture_chart(job.symbol, job.timeframes)
-                job.result = paths
+                self._capture_in_subprocess(job)
             except Exception as e:
                 job.error = str(e)
                 print(f"[worker] Error: {e}")

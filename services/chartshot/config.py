@@ -42,3 +42,7 @@ ACTION_TIMEOUT = 30
 # 一个 job 占用 worker 超过这个时长即视为卡死：不再让它挡住手动截图。
 # 取值需大于最坏合法耗时（CAPTURE_BASE_OVERHEAD + PER_TF_BUDGET × 周期数）
 STALE_JOB_SECONDS = 600
+# 子进程硬杀余量：job 预算之外再给这么多秒，超时 killpg 整棵进程树。
+# 两次卡死事故（SOLUSDT、SSE:000001 各挂 2~4 小时）证明线程内超时防不住
+# Playwright 的全部挂死路径——进程级 SIGKILL 是唯一兜底。
+SUBPROC_KILL_GRACE = 20

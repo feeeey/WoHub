@@ -44,7 +44,8 @@ pytest -m "not network"       # Skip live API tests
 - `backend/sources/` — Data fetching: `pine_screener.py` (TradingView), individual exchange clients (Binance, OKX, Bybit, Bitget)
 - `backend/screenshots/` — 截图模块：`service.py`（唯一截图入口 `capture()` + 记录查询/删除）、`dispatch.py`（多渠道推送 + push_logs）、`client.py`（ChartShot HTTP 客户端）、`pipeline.py`（任务流水线兼容封装）
 - `backend/tasks/` — `scheduler.py` (APScheduler cron/interval jobs), `executor.py` (task execution pipeline), `tracker.py` + `outcome_poller.py` (persistent signal outcome tracking at 1h/4h/24h, restart-safe)
-- `backend/agent/` — chat agent: `chat/` (store/events/runtime/worker/vision/semantics/prompts), `tools.py` (read-only, throttled), `decider.py` (RuleDecider — task-pipeline threshold logic), `config.py` (llm_channels 渠道 CRUD + 双槽位渠道解析 + Fernet key), `llm.py`, `validator.py` (stub)
+- `backend/agent/` — chat agent: `chat/` (store/events/runtime/worker/vision/semantics/prompts), `tools.py` (read-only, throttled), `decider.py` (RuleDecider — task-pipeline threshold logic), `config.py` (llm_channels 渠道 CRUD + 双槽位渠道解析 + Fernet key), `llm.py`, `outcome_stats.py` (信号后验统计聚合，闭环数据侧), `validator.py` (StrategyValidator 接口 + OutcomeValidator 实现)
+- `backend/evals/` — agent 行为评测（区别于 tests/ 的管道测试）：三层评分（L1 工具选择 / L2 轨迹效率 / L3 答案质量规则），金标用例 `golden/*.json`，`python -m evals` 离线按 prompt_version×model 分桶打分存量轨迹，`--live` 用 fixtures 固定工具数据金标实跑，`extract` 从真实轨迹提取用例骨架
 - `backend/channels/` — Notification dispatch: `telegram.py`, `discord.py`, `sender.py`
 - `backend/trading/` — Binance USDT-M client, credential encryption, order service (bracket + SL recovery), position planning
 - `backend/klines/` — Candlestick fetch, pattern detection, classification, market structure (pivots, ATR)
@@ -101,6 +102,20 @@ own channel (`vision_channel_id`, NULL = follow main channel). Red lines:
 functions; execution always goes through the human-confirmed Trade page
 (`/trade?symbol=…&direction=…` prefill). Design docs:
 `docs/superpowers/specs/2026-07-04-chat-agent-design.md`.
+
+**Outcome 闭环**：`agent/outcome_stats.py` 把 signals×outcomes 按筛选器
+label 聚合成后验统计（方向盲原始收益，10 分钟 TTL 缓存），两处消费：
+system prompt 的语义档案每条附带 `↳ 近90天后验（n=…）` 行（样本 <5 显式标
+「样本不足」而不给数字）；chat 工具 `get_screener_stats` 回答"哪个筛选器
+最近靠谱"。`OutcomeValidator`（validator.py）用同一数据验证语义档案的 bias
+声明：连续折分段一致性 + 精确二项检验 + Bonferroni 校正，样本不足显式
+not_validated——pass 含义是「方向声明与后验分布显著一致」，不是可盈利。
+
+**行为评测**：改 prompt/换模型前后跑 `python -m evals`（离线，存量轨迹按
+prompt_version×model 分桶）与 `python -m evals --live`（金标实跑，工具数据
+用 evals/fixtures.py 固定，产生真实 LLM 费用）。金标用例在 `evals/golden/`，
+工具名用 trace 内部名（`_tool()` 的 name 参数，非注册函数名）。评分权重与
+规则见 `evals/scoring.py`；system prompt 里新增的行为承诺应同步加进 L3 规则。
 
 ### Database
 

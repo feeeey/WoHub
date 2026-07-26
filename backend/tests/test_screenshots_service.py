@@ -262,3 +262,63 @@ def test_pipeline_capture_marks_source_as_task(shots_dir):
                return_value={"ok": True, "files": ["BTCUSDT_1h_x.png"]}) as m:
         pipeline.capture_and_dispatch(None, "BTCUSDT", ["1h"], channel=None)
     assert m.call_args.kwargs["source"] == "task"
+
+
+# --- executor 截图数量上限与熔断 ---
+
+def _cap_patch(results):
+    """按顺序返回预设结果的 capture_and_dispatch 替身。"""
+    calls = []
+
+    def fake(task_id, symbol, timeframes, channel=None):
+        calls.append(symbol)
+        r = results[min(len(calls) - 1, len(results) - 1)]
+        return {"shots": [{"id": 1}] if r else [], "errors": [], "pushes": []}
+
+    return fake, calls
+
+
+def test_capture_batch_respects_limit():
+    from tasks import executor
+    fake, calls = _cap_patch([True])
+    with patch("tasks.executor.capture_and_dispatch", side_effect=fake):
+        n = executor._capture_batch(1, [f"S{i}USDT" for i in range(182)],
+                                    ["1h"], None, limit=3)
+    assert len(calls) == 3      # 182 个候选只截 3 个
+    assert n == 3
+
+
+def test_capture_batch_breaks_on_failure_streak():
+    """ChartShot 卡住时继续投递只会加深积压，连续失败即熔断。"""
+    from tasks import executor
+    fake, calls = _cap_patch([False])   # 每次都失败
+    with patch("tasks.executor.capture_and_dispatch", side_effect=fake):
+        n = executor._capture_batch(1, ["A", "B", "C", "D", "E"], ["1h"], None, limit=5)
+    assert len(calls) == executor.SCREENSHOT_FAILURE_STREAK
+    assert n == 0
+
+
+def test_capture_batch_streak_resets_on_success():
+    from tasks import executor
+    seq = [False, True, False, False]
+    fake, calls = _cap_patch(seq)
+    with patch("tasks.executor.capture_and_dispatch", side_effect=fake):
+        executor._capture_batch(1, ["A", "B", "C", "D"], ["1h"], None, limit=4)
+    assert len(calls) == 4      # 中间成功一次，计数归零，没有提前熔断
+
+
+def test_shot_limit_defaults_and_caps():
+    from tasks import executor
+    assert executor._shot_limit({}) == executor.DEFAULT_MAX_SCREENSHOTS
+    assert executor._shot_limit({"max_screenshots": 5}) == 5
+    assert executor._shot_limit({"max_screenshots": 999}) == executor.SCREENSHOT_HARD_CAP
+    assert executor._shot_limit({"max_screenshots": 0}) == 0
+    assert executor._shot_limit({"max_screenshots": "bad"}) == executor.DEFAULT_MAX_SCREENSHOTS
+
+
+def test_capture_batch_zero_limit_captures_nothing():
+    from tasks import executor
+    fake, calls = _cap_patch([True])
+    with patch("tasks.executor.capture_and_dispatch", side_effect=fake):
+        executor._capture_batch(1, ["A", "B"], ["1h"], None, limit=0)
+    assert calls == []

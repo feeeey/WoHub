@@ -13,6 +13,50 @@ from tasks.tracker import record_snapshot, schedule_outcome_tracking
 # Store last execution result for the test endpoint
 _last_results = {}
 
+# 每次任务执行最多截几张图。全市场扫描可能命中上百个标的，逐个截图既跑不完
+# （ChartShot 单 worker 串行，每张约 10s）也会把队列堵死，拖垮后续任务。
+DEFAULT_MAX_SCREENSHOTS = 3
+# 上限兜底：即使任务里配了更大的值也不放行
+SCREENSHOT_HARD_CAP = 20
+# 连续失败这么多次就放弃本轮剩余截图 —— ChartShot 卡住时继续投递只会加深积压
+SCREENSHOT_FAILURE_STREAK = 2
+
+
+def _shot_limit(config):
+    raw = config.get("max_screenshots", DEFAULT_MAX_SCREENSHOTS)
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = DEFAULT_MAX_SCREENSHOTS
+    return max(0, min(n, SCREENSHOT_HARD_CAP))
+
+
+def _capture_batch(task_id, symbols, timeframes, channel, limit, total=None):
+    """按上限逐个截图，连续失败即熔断。返回成功张数。
+
+    symbols 已是清洗过的标的列表。total 是过滤前的候选数，仅用于日志说明被截断多少。
+    """
+    picked = list(symbols)[:limit]
+    total = len(symbols) if total is None else total
+    if total > len(picked):
+        applog("screenshots", "info",
+               f"任务 {task_id}: {total} 个候选标的，按上限只截前 {len(picked)} 个")
+
+    ok_count, streak = 0, 0
+    for sym in picked:
+        result = capture_and_dispatch(task_id, sym, timeframes, channel)
+        if result.get("shots"):
+            ok_count += 1
+            streak = 0
+            continue
+        streak += 1
+        if streak >= SCREENSHOT_FAILURE_STREAK:
+            applog("screenshots", "warn",
+                   f"任务 {task_id}: 连续 {streak} 次截图失败，跳过本轮剩余 "
+                   f"{len(picked) - picked.index(sym) - 1} 个标的")
+            break
+    return ok_count
+
 
 def get_last_result(task_id):
     return _last_results.get(task_id)
@@ -141,9 +185,8 @@ def _exec_watchlist_signal(task_id, config, actions, channel):
 
     # 不再要求 channel 存在：没配推送渠道时仍截图存档，供 UI / agent 事后调阅
     if "chart_shot" in actions:
-        for sym in list(all_signals.keys())[:3]:
-            clean = sym.replace("BINANCE:", "").replace(".P", "")
-            capture_and_dispatch(task_id, clean, resolutions, channel)
+        cleaned = [s.replace("BINANCE:", "").replace(".P", "") for s in all_signals]
+        _capture_batch(task_id, cleaned, resolutions, channel, _shot_limit(config))
 
 
 def _exec_market_scan(task_id, config, actions, channel):
@@ -192,10 +235,11 @@ def _exec_market_scan(task_id, config, actions, channel):
 
     if "chart_shot" in actions and overlaps:
         shot_threshold = config.get("screenshot_threshold", 3)
-        for sym in list(overlaps.keys()):
-            if len(overlaps[sym]) >= shot_threshold:
-                clean = sym.replace("BINANCE:", "").replace(".P", "")
-                capture_and_dispatch(task_id, clean, resolutions[:1], channel)
+        # 这里原本没有数量上限：全市场扫描命中上百个标的时会逐个截图，
+        # 把 ChartShot 队列彻底堵死。现在按 max_screenshots 截断。
+        cleaned = [sym.replace("BINANCE:", "").replace(".P", "")
+                   for sym, labels in overlaps.items() if len(labels) >= shot_threshold]
+        _capture_batch(task_id, cleaned, resolutions[:1], channel, _shot_limit(config))
 
 
 def _exec_anomaly_watch(task_id, config, actions, channel):
@@ -253,16 +297,17 @@ def _exec_anomaly_watch(task_id, config, actions, channel):
 
     # 不再要求 channel 存在：没配推送渠道时仍截图存档，供 UI / agent 事后调阅
     if "chart_shot" in actions:
-        for m in matches[:3]:
-            capture_and_dispatch(task_id, m["symbol"], resolutions[:1], channel)
+        _capture_batch(task_id, [m["symbol"] for m in matches],
+                       resolutions[:1], channel, _shot_limit(config))
 
 
 def _exec_scheduled_shot(task_id, config, actions, channel):
     symbols = config.get("symbols", [])
     timeframes = config.get("timeframes", ["1h"])
 
-    for sym in symbols:
-        capture_and_dispatch(task_id, sym, timeframes, channel)
+    # 标的是用户显式配的，默认放行全部；但仍受 SCREENSHOT_HARD_CAP 和熔断保护
+    limit = _shot_limit({"max_screenshots": config.get("max_screenshots", len(symbols))})
+    _capture_batch(task_id, symbols, timeframes, channel, limit)
 
 
 def _send_push(channel, text):

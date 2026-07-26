@@ -23,6 +23,7 @@ from trading.binance_client import (
     cancel_order as bn_cancel_order,
     is_retryable,
     ERR_NO_NEED_TO_CHANGE_MARGIN_TYPE,
+    ERR_ORDER_NOT_FOUND,
 )
 from trading.models import OrderRequest, OrderResult
 from trading import service
@@ -1210,6 +1211,67 @@ def test_close_position_returns_error_when_no_position(monkeypatch):
     result = service.close_position(cred_id, "BTCUSDT")
     assert not result.ok
     assert "no open position" in result.error
+
+
+def test_close_position_carries_an_idempotency_key(monkeypatch):
+    """本模块每一笔下单都必须带 clientOrderId：没有它，transport 层重发
+    （proxy→direct 回退）无法被交易所去重，网络异常也无从查证。
+    close_position 曾是唯一的例外。"""
+    captured = {}
+
+    monkeypatch.setattr("trading.binance_client.position_risk",
+                        lambda env, k, s, symbol=None: [
+                            {"symbol": "BTCUSDT", "positionAmt": "0.005"}])
+
+    def fake_order(env, k, s, **kw):
+        captured.update(kw)
+        return {"orderId": 7, "status": "FILLED", "executedQty": "0.005"}
+
+    monkeypatch.setattr("trading.binance_client.place_order", fake_order)
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    service.close_position(cred_id, "BTCUSDT")
+
+    assert captured.get("new_client_order_id", "").startswith("wohub-")
+
+
+def test_close_position_resolves_ambiguous_network_error_by_lookup(monkeypatch):
+    """网络异常时查单确认，而不是把已经成交的平仓报成失败。"""
+    monkeypatch.setattr("trading.binance_client.position_risk",
+                        lambda env, k, s, symbol=None: [
+                            {"symbol": "BTCUSDT", "positionAmt": "0.005"}])
+    monkeypatch.setattr("trading.binance_client.place_order",
+                        lambda *a, **kw: (_ for _ in ()).throw(
+                            requests.ConnectionError("connection reset")))
+    monkeypatch.setattr("trading.binance_client.get_order",
+                        lambda env, k, s, sym, orig_client_order_id=None: {
+                            "orderId": 8, "status": "FILLED", "executedQty": "0.005",
+                            "avgPrice": "71000"})
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.close_position(cred_id, "BTCUSDT")
+    assert result.ok and result.binance_order_id == "8"
+
+
+def test_close_position_network_error_is_recorded_not_raised(monkeypatch):
+    """订单确实没送达时返回可读错误并落 trading_orders，而不是冒成 500。"""
+    monkeypatch.setattr("trading.binance_client.position_risk",
+                        lambda env, k, s, symbol=None: [
+                            {"symbol": "BTCUSDT", "positionAmt": "0.005"}])
+    monkeypatch.setattr("trading.binance_client.place_order",
+                        lambda *a, **kw: (_ for _ in ()).throw(
+                            requests.ConnectionError("boom")))
+    monkeypatch.setattr("trading.binance_client.get_order",
+                        lambda *a, **kw: (_ for _ in ()).throw(
+                            BinanceAPIError(code=ERR_ORDER_NOT_FOUND, msg="not found",
+                                            http_status=400)))
+
+    cred_id = creds.add_credential("t", "testnet", "K", "S")
+    result = service.close_position(cred_id, "BTCUSDT")
+    assert not result.ok and "平仓请求异常" in result.error
+
+    latest = service.list_recent_orders(limit=1)[0]
+    assert latest["status"] == "FAILED", "失败的平仓也必须留下审计记录"
+    assert latest["error_message"]
 
 
 # ---------- open orders / cancel ----------

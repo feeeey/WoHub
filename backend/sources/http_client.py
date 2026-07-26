@@ -48,12 +48,23 @@ def _get_direct_session() -> requests.Session:
         return _direct_session
 
 
-def fetch_with_fallback(method, url, **kwargs):
+def fetch_with_fallback(method, url, allow_retry=True, **kwargs):
     """Try with proxy session first. If proxy fails, retry with direct connection.
 
     requests.Session has no timeout attribute, so a per-request timeout is
     injected here — otherwise a hung connection blocks the worker forever.
     Callers may override with an explicit timeout= kwarg.
+
+    `allow_retry=False` disables the direct-connection fallback. **Every
+    non-idempotent request must pass it.** A ConnectionError means "the request
+    may or may not have reached the server" — for a GET that is harmless to
+    repeat, but resending an order submission can execute it twice. Binance
+    only enforces `newClientOrderId` uniqueness among *open* orders, so a
+    MARKET order that already filled (milliseconds) does NOT reject the resend;
+    it fills again. Worse, the fallback swallows the original exception and
+    returns the second order's success response, so the caller's
+    ambiguity-resolution path (trading/service.py `_query_order_state`) never
+    runs and the first fill stays invisible.
     """
     kwargs.setdefault("timeout", 10)
     session = get_session()
@@ -62,7 +73,7 @@ def fetch_with_fallback(method, url, **kwargs):
         resp.raise_for_status()
         return resp
     except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
-        if not settings.proxy_enabled:
+        if not settings.proxy_enabled or not allow_retry:
             raise
         print(f"[http] Proxy failed for {url}, falling back to direct: {e}")
         direct = _get_direct_session()

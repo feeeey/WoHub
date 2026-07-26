@@ -134,6 +134,12 @@ def _request(
     # out, and translate to BinanceAPIError so the caller sees the proper
     # Binance code/msg (e.g. -4046 "no need to change margin type") rather than
     # a generic HTTPError that bubbles up as a 500.
+    # 只有 GET 允许 proxy→direct 的传输层回退重发。写操作（下单/撤单/改杠杆）
+    # 一旦重发就可能被执行两次：币安的 newClientOrderId 唯一性只覆盖 *挂着的*
+    # 订单，毫秒级成交的 MARKET 单再发一次不会被拒，会二次成交。让 ConnectionError
+    # 原样上抛，交给 service 层的 _query_order_state 查单消歧——那才是正确的处理。
+    idempotent = method.upper() == "GET"
+
     try:
         if signed:
             assert api_secret is not None, "signed=True requires api_secret"
@@ -143,11 +149,13 @@ def _request(
             applog("binance_trade", "debug",
                    f"{method} {path} params="
                    f"{ {k: v for k, v in params.items() if k not in ('signature',)} }")
-            resp = fetch_with_fallback(method.lower(), full, headers=headers)
+            resp = fetch_with_fallback(method.lower(), full, headers=headers,
+                                       allow_retry=idempotent)
         else:
             applog("binance_trade", "debug", f"{method} {path} (public)")
             resp = fetch_with_fallback(
                 method.lower(), url, params=params, headers=headers,
+                allow_retry=idempotent,
             )
     except requests.HTTPError as e:
         if e.response is None:
@@ -238,9 +246,13 @@ def place_order(
         "type": order_type,
     }
     if new_client_order_id:
-        # Caller-supplied idempotency key. Binance rejects a duplicate id while
-        # the first order is live, so a transport-level resend (proxy->direct
-        # fallback in fetch_with_fallback) can never double-fill.
+        # Caller-supplied idempotency key. NOTE the exact guarantee: Binance
+        # rejects a duplicate id only while the first order is still OPEN. A
+        # MARKET order fills in milliseconds, after which the same id is
+        # accepted as a brand-new order — so this key does NOT by itself make a
+        # resend safe. It is what lets the caller RESOLVE an ambiguous failure
+        # via get_order (trading/service.py `_query_order_state`); preventing
+        # the resend in the first place is `_request`'s job (GET-only fallback).
         params["newClientOrderId"] = new_client_order_id
 
     if order_type in ("MARKET", "LIMIT"):

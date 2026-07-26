@@ -591,14 +591,23 @@
     <div class="card section">
       <div class="section-header">
         <h3 class="section-title">筛选器语义档案</h3>
+        <button class="btn btn-sm" @click="runSemanticsAudit" :disabled="auditRunning">
+          {{ auditRunning ? '审计中…' : '后验审计' }}
+        </button>
       </div>
       <p class="section-desc">
         注入 agent system prompt，让它理解每个筛选器的含义（初稿可直接修改）。
+        「后验审计」用真实信号后验数据检验各档案的方向声明（分段一致性 + 显著性检验 +
+        Bonferroni 校正）——<b>pass 表示方向声明与数据一致，不等于按此交易可盈利</b>。
       </p>
       <div v-for="s in semantics" :key="s.key" class="sem-card">
         <div class="sem-head" @click="s._open = !s._open">
           <strong>{{ s.label }}</strong> <code>{{ s.key }}</code>
           <span class="sem-bias">{{ s.bias }}</span>
+          <span v-if="auditResults[s.key]" class="badge" :class="auditBadge(auditResults[s.key].verdict)"
+                :title="auditResults[s.key].detail || ''">
+            {{ auditText(auditResults[s.key]) }}
+          </span>
         </div>
         <div v-if="s._open" class="sem-body">
           <label>含义<textarea v-model="s.meaning" rows="2" /></label>
@@ -1072,6 +1081,33 @@ async function testChannel() {
   } finally {
     channelTesting.value = false
   }
+}
+
+// ---- 语义档案后验审计 ----
+const auditRunning = ref(false)
+const auditResults = ref({})    // key -> {verdict, n, hit_rate, detail, ...}
+
+async function runSemanticsAudit() {
+  auditRunning.value = true
+  try {
+    const res = await api.validateSemantics()
+    auditResults.value = Object.fromEntries(res.results.map(r => [r.key, r]))
+  } catch (e) {
+    evalMsg.value = '审计失败: ' + e.message; evalOk.value = false
+  } finally {
+    auditRunning.value = false
+  }
+}
+
+function auditBadge(verdict) {
+  return {pass: 'badge-success', fail: 'badge-danger'}[verdict] || 'badge-warning'
+}
+
+function auditText(r) {
+  const name = {pass: '数据支持', fail: '数据不支持', skipped: '不可检验',
+                not_validated: '样本不足'}[r.verdict] || r.verdict
+  if (r.hit_rate != null) return `${name} · 命中率 ${(r.hit_rate * 100).toFixed(1)}% (n=${r.n})`
+  return name
 }
 
 // ---- Agent 长期记忆 ----

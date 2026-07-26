@@ -390,6 +390,10 @@ export const api = {
     return request('/agent/test', { method: 'POST', body: JSON.stringify(overrides) })
   },
 
+  async validateSemantics() {
+    return request('/agent/semantics/validate', { method: 'POST' })
+  },
+
   // ---- agent 长期记忆 ----
   async getAgentMemories() {
     return request('/agent/memories')

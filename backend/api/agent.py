@@ -215,6 +215,45 @@ def put_semantics(folder: str, name: str, body: SemanticsBody):
     return {"ok": True}
 
 
+@router.post("/semantics/validate")
+def validate_semantics():
+    """用真实后验数据审计语义档案的方向声明（OutcomeValidator）。
+
+    只有 SCREENER_BIAS 里映射了明确 long/short 的筛选器可验证；
+    双向/中性的档案没有可检验的方向声明，如实返回 skipped。
+    """
+    from agent.chat.semantics import get_all
+    from agent.decider import SCREENER_BIAS
+    from agent.validator import OutcomeValidator
+
+    rows = get_all()
+    biased = [(r, SCREENER_BIAS[r["key"]]) for r in rows if r["key"] in SCREENER_BIAS]
+    results = [{"key": r["key"], "label": r["label"], "verdict": "skipped",
+                "detail": "无明确方向声明（双向/中性），不可检验"}
+               for r in rows if r["key"] not in SCREENER_BIAS]
+
+    if biased:
+        # 全部方向声明装进一个 spec 一次验证：Bonferroni 按本次审计的
+        # 检验总数校正——逐个单独验证会低估多重检验的假阳性率
+        report = OutcomeValidator().validate({
+            "name": "semantics-audit", "sample_window": "90d",
+            "rules": [{"label": r["label"], "bias": b} for r, b in biased]})
+        by_label = {m["label"]: m for m in report.metrics.get("rules", [])}
+        for r, bias in biased:
+            m = by_label.get(r["label"], {})
+            results.append({"key": r["key"], "label": r["label"], "bias": bias,
+                            "verdict": m.get("verdict", "not_validated"),
+                            **{k: m[k] for k in ("n", "hit_rate", "p_value",
+                               "alpha_adjusted", "fold_hit_rates", "detail")
+                               if k in m}})
+
+    key_order = {r["key"]: i for i, r in enumerate(rows)}
+    results.sort(key=lambda x: key_order.get(x["key"], 99))
+    return {"results": results,
+            "note": "pass=方向声明与后验分布显著一致（≠按此交易可盈利）；"
+                    "not_validated=样本不足，拒绝背书；已按检验数做 Bonferroni 校正"}
+
+
 # ---- 长期记忆管理（写入走 chat 工具，这里只有查看/删除）----
 
 @router.get("/memories")

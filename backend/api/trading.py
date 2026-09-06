@@ -16,6 +16,7 @@ from trading.service import (
     test_credential, get_account, place_order, list_recent_orders,
     place_order_bracket, close_position, close_all, list_open_orders,
     cancel_open_order, list_binance_order_history, build_position_plan,
+    prepare_fixed_risk_order, get_loss_guard_status,
 )
 from trading.models import OrderRequest
 
@@ -88,6 +89,20 @@ def account(credential_id: int):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ---------- account-wide loss-streak opening guard ----------
+
+@router.get("/risk-guard/{credential_id}")
+def risk_guard(credential_id: int):
+    try:
+        return get_loss_guard_status(credential_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Fail closed: inability to verify the history must never become an
+        # accidental permission to open a new position.
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ---------- order placement ----------
 
 class OrderBody(BaseModel):
@@ -104,6 +119,11 @@ class OrderBody(BaseModel):
 
 @router.post("/order")
 def place(body: OrderBody):
+    if not body.reduce_only:
+        raise HTTPException(
+            status_code=400,
+            detail="开仓必须使用 /trading/order/bracket，由系统强制计算风险、止损和止盈",
+        )
     req = OrderRequest(
         symbol=body.symbol.upper(),
         side=body.side,
@@ -128,36 +148,76 @@ class BracketOrderBody(BaseModel):
     symbol: str = Field(min_length=1, max_length=20)
     side: str = Field(pattern="^(BUY|SELL)$")
     order_type: str = Field(pattern="^(MARKET|LIMIT)$")
-    quantity: float = Field(gt=0)
+    quantity: float | None = Field(default=None, gt=0)
     price: float | None = Field(default=None, gt=0)
     leverage: int = Field(default=1, ge=1, le=125)
     margin_type: str = Field(default="ISOLATED", pattern="^(ISOLATED|CROSSED)$")
     reduce_only: bool = False
     stop_loss_price: float | None = Field(default=None, gt=0)
     take_profit_price: float | None = Field(default=None, gt=0)
+    risk_pct: float = Field(default=1.0, gt=0, le=2.0)
+    reward_risk_ratio: float = Field(default=1.5, ge=1.5, le=100)
+
+
+def _prepare_risk_plan(
+    body: BracketOrderBody,
+    *,
+    force_guard_refresh: bool = False,
+) -> dict:
+    if body.reduce_only:
+        raise ValueError("严格风控组合单仅用于开仓，不能设置 reduce_only")
+    return prepare_fixed_risk_order(
+        credential_id=body.credential_id,
+        symbol=body.symbol,
+        side=body.side,
+        order_type=body.order_type,
+        quantity=body.quantity,
+        leverage=body.leverage,
+        risk_pct=body.risk_pct,
+        reward_risk_ratio=body.reward_risk_ratio,
+        stop_loss_price=body.stop_loss_price,
+        take_profit_price=body.take_profit_price,
+        force_guard_refresh=force_guard_refresh,
+    )
+
+
+@router.post("/order/preview")
+def preview_bracket(body: BracketOrderBody):
+    """Read-only authoritative preview of the mandatory fixed-risk policy."""
+    try:
+        return _prepare_risk_plan(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/order/bracket")
 def place_bracket(body: BracketOrderBody):
-    req = OrderRequest(
-        symbol=body.symbol.upper(),
-        side=body.side,
-        order_type=body.order_type,
-        quantity=body.quantity,
-        price=body.price,
-        leverage=body.leverage,
-        margin_type=body.margin_type,
-        reduce_only=body.reduce_only,
-    )
     try:
+        risk_plan = _prepare_risk_plan(body, force_guard_refresh=True)
+        req = OrderRequest(
+            symbol=body.symbol.upper(),
+            side=body.side,
+            order_type=body.order_type,
+            quantity=risk_plan["quantity"],
+            price=body.price,
+            leverage=body.leverage,
+            margin_type=body.margin_type,
+            reduce_only=False,
+        )
         result = place_order_bracket(
             body.credential_id, req,
-            stop_loss_price=body.stop_loss_price,
-            take_profit_price=body.take_profit_price,
+            stop_loss_price=risk_plan["stop_price"],
+            take_profit_price=risk_plan["take_profit_price"],
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return result.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    out = result.to_dict()
+    out["risk_plan"] = risk_plan
+    return out
 
 
 # ---------- close position ----------
@@ -254,8 +314,8 @@ class PlanBody(BaseModel):
     direction: str = Field(pattern="^(long|short)$")
     order_type: str = Field(pattern="^(MARKET|LIMIT)$")
     entry_price: float | None = Field(default=None, gt=0)
-    risk_pct: float = Field(default=1.0, gt=0, le=100)
-    rr: float = Field(default=1.5, gt=0, le=100)
+    risk_pct: float = Field(default=1.0, gt=0, le=2.0)
+    rr: float = Field(default=1.5, ge=1.5, le=100)
     atr_mult: float = Field(default=0.3, ge=0, le=50)
     atr_period: int = Field(default=14, ge=1, le=1000)
     fractal_k: int = Field(default=2, ge=1, le=50)

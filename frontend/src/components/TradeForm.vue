@@ -17,23 +17,23 @@
       <div class="form-row">
         <label>订单类型</label>
         <div class="radio-group">
-          <label class="radio-pill" :class="{ active: form.order_type === 'MARKET' }">
-            <input type="radio" value="MARKET" v-model="form.order_type" /> 市价
-          </label>
-          <label class="radio-pill" :class="{ active: form.order_type === 'LIMIT' }">
-            <input type="radio" value="LIMIT" v-model="form.order_type" /> 限价
+          <label class="radio-pill active">
+            <input type="radio" value="MARKET" v-model="form.order_type" /> 市价 · 严格风控
           </label>
         </div>
+        <small class="field-hint">限价单需成交联动保护，当前严格模式暂不开放</small>
       </div>
 
       <div class="form-row">
-        <label>合约数量</label>
-        <input v-model.number="form.quantity" type="number" step="0.001" min="0" placeholder="0.001" />
-      </div>
-
-      <div v-if="form.order_type === 'LIMIT'" class="form-row">
-        <label>限价</label>
-        <input v-model.number="form.price" type="number" step="0.01" placeholder="70000.00" />
+        <label>{{ useSL ? '合约数量（自动）' : '合约数量' }}</label>
+        <input
+          v-model.number="form.quantity"
+          type="number" step="0.001" min="0" placeholder="0.001"
+          :disabled="useSL"
+        />
+        <small class="field-hint">
+          {{ useSL ? '系统将按总资金 × 风险% ÷ 止损距离反算' : '未填止损时，系统按此数量反算固定亏损位置' }}
+        </small>
       </div>
 
       <div class="form-row">
@@ -54,11 +54,31 @@
       </div>
     </div>
 
+    <div class="risk-policy">
+      <div class="risk-title">
+        <strong>强制资金风控</strong>
+        <span>每笔开仓必须带止损与止盈</span>
+      </div>
+      <div class="risk-funds">
+        <div><label>当前合约总资金</label><b>{{ fmtMoney(accountEquity) }} U</b></div>
+        <div><label>本单风险金额</label><b>{{ fmtMoney(riskAmount) }} U</b></div>
+      </div>
+      <div class="plan-inputs">
+        <label>
+          风险%
+          <input v-model.number="planParams.risk_pct" type="number" step="0.1" min="0.1" max="2" />
+        </label>
+        <label>
+          最低盈亏比
+          <input v-model.number="planParams.rr" type="number" step="0.1" min="1.5" />
+        </label>
+      </div>
+      <p class="risk-hint">风险最高 2%，盈亏比最低 1.5；杠杆只影响保证金，不参与开仓量公式。手续费、资金费和滑点不计入该金额。</p>
+    </div>
+
     <!-- smart plan: structure stop + risk-defined sizing -->
     <div class="plan-row">
       <div class="plan-inputs">
-        <label>风险% <input v-model.number="planParams.risk_pct" type="number" step="0.1" min="0.1" /></label>
-        <label>盈亏比 <input v-model.number="planParams.rr" type="number" step="0.1" min="0.1" /></label>
         <label>ATR× <input v-model.number="planParams.atr_mult" type="number" step="0.05" min="0" /></label>
       </div>
       <button
@@ -94,7 +114,8 @@
       </label>
     </div>
     <p class="protection-hint">
-      SL/TP 触发时按市价 <strong>整仓平掉</strong>（closePosition=true）。
+      可手动指定；留空时系统自动反算。SL/TP 触发时按市价
+      <strong>整仓平掉</strong>（closePosition=true）。
     </p>
 
     <div class="form-actions">
@@ -102,9 +123,14 @@
         class="btn btn-primary"
         :disabled="!canSubmit || submitting"
         :class="form.side === 'BUY' ? 'btn-buy' : 'btn-sell'"
+        :title="tradingAllowed ? '' : tradingLockReason"
         @click="emit('open-confirm', buildPayload())"
       >
-        {{ submitting ? '提交中…' : (form.side === 'BUY' ? '做多 / 开仓' : '做空 / 开仓') }}
+        {{ submitting
+          ? '提交中…'
+          : (!tradingAllowed
+            ? '风险锁定，禁止开仓'
+            : (form.side === 'BUY' ? '做多 / 开仓' : '做空 / 开仓')) }}
       </button>
     </div>
   </div>
@@ -116,11 +142,14 @@ import { ref, computed, watch } from 'vue'
 const props = defineProps({
   symbol: { type: String, required: true },
   credentialId: { type: Number, default: null },
+  accountEquity: { type: Number, default: 0 },
+  tradingAllowed: { type: Boolean, default: false },
+  tradingLockReason: { type: String, default: '' },
   submitting: { type: Boolean, default: false },
-  computing: { type: Boolean, default: false },   // NEW: plan request in flight
+  computing: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['open-confirm', 'compute-plan'])   // add 'compute-plan'
+const emit = defineEmits(['open-confirm', 'compute-plan'])
 
 const planParams = ref({ risk_pct: 1.0, rr: 1.5, atr_mult: 0.3 })
 
@@ -144,27 +173,43 @@ watch(useTP, (v) => { if (!v) form.value.take_profit_price = null })
 
 const canSubmit = computed(() => {
   if (!props.credentialId || !props.symbol) return false
+  if (!props.tradingAllowed) return false
   const f = form.value
-  if (!f.quantity || f.quantity <= 0) return false
-  if (f.order_type === 'LIMIT' && (!f.price || f.price <= 0)) return false
+  if (!props.accountEquity || props.accountEquity <= 0) return false
+  if (!planParams.value.risk_pct || planParams.value.risk_pct <= 0 || planParams.value.risk_pct > 2) return false
+  if (!planParams.value.rr || planParams.value.rr < 1.5) return false
+  if (!useSL.value && (!f.quantity || f.quantity <= 0)) return false
   if (useSL.value && (!f.stop_loss_price || f.stop_loss_price <= 0)) return false
   if (useTP.value && (!f.take_profit_price || f.take_profit_price <= 0)) return false
   return true
 })
 
+const riskAmount = computed(() => {
+  const equity = Number(props.accountEquity || 0)
+  const pct = Number(planParams.value.risk_pct || 0)
+  return equity * pct / 100
+})
+
+function normalizedSymbol() {
+  const v = props.symbol.trim().toUpperCase()
+  return v.endsWith('USDT') ? v : `${v}USDT`
+}
+
 function buildPayload() {
   const f = form.value
   return {
     credential_id: props.credentialId,
-    symbol: props.symbol.toUpperCase(),
+    symbol: normalizedSymbol(),
     side: f.side,
-    order_type: f.order_type,
-    quantity: f.quantity,
-    price: f.order_type === 'LIMIT' ? f.price : null,
+    order_type: 'MARKET',
+    quantity: useSL.value ? null : f.quantity,
+    price: null,
     leverage: f.leverage,
     margin_type: f.margin_type,
     stop_loss_price: useSL.value ? f.stop_loss_price : null,
     take_profit_price: useTP.value ? f.take_profit_price : null,
+    risk_pct: planParams.value.risk_pct,
+    reward_risk_ratio: planParams.value.rr,
   }
 }
 
@@ -172,8 +217,8 @@ function buildPlanRequest() {
   const f = form.value
   return {
     direction: f.side === 'BUY' ? 'long' : 'short',
-    order_type: f.order_type,
-    entry_price: f.order_type === 'LIMIT' ? f.price : null,
+    order_type: 'MARKET',
+    entry_price: null,
     leverage: f.leverage,
     risk_pct: planParams.value.risk_pct,
     rr: planParams.value.rr,
@@ -204,6 +249,11 @@ function setDirection(dir) {
   else if (dir === 'short') form.value.side = 'SELL'
 }
 
+function fmtMoney(n) {
+  if (n == null || Number.isNaN(Number(n))) return '—'
+  return Number(n).toFixed(2)
+}
+
 defineExpose({ applyPlan, setDirection })
 </script>
 
@@ -231,6 +281,11 @@ defineExpose({ applyPlan, setDirection })
   color: var(--text-secondary);
   font-weight: 500;
   letter-spacing: 0.02em;
+}
+.field-hint {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .radio-group {
@@ -338,6 +393,42 @@ defineExpose({ applyPlan, setDirection })
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-md);
   background: var(--bg-primary);
+}
+.risk-policy {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+}
+.risk-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.risk-title strong { font-size: 14px; color: var(--accent); }
+.risk-title span { font-size: 11px; color: var(--text-secondary); }
+.risk-funds {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.risk-funds > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.risk-funds label { font-size: 11px; color: var(--text-secondary); }
+.risk-funds b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.risk-hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 .plan-inputs {
   display: flex;

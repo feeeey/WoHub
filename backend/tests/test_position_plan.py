@@ -37,6 +37,18 @@ def test_parse_filters_unknown_symbol_raises():
         parse_filters(_fake_info(), "ETHUSDT")
 
 
+def test_parse_filters_market_uses_market_lot_size():
+    info = _fake_info()
+    info["symbols"][0]["filters"].append({
+        "filterType": "MARKET_LOT_SIZE",
+        "stepSize": "0.01",
+        "minQty": "0.02",
+    })
+    f = parse_filters(info, "BTCUSDT", order_type="MARKET")
+    assert f.step_size == 0.01
+    assert f.min_qty == 0.02
+
+
 def test_round_step_floor_ceil_nearest():
     assert _round_step(94.47, 0.10, "floor") == 94.4
     assert _round_step(94.41, 0.10, "ceil") == 94.5

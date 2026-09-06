@@ -178,6 +178,7 @@ realpath + 根目录包含校验——SPA 兜底路由拿到的 path 已被百�
 | `CACHE_TTL` | `15` | Market data cache TTL (seconds) |
 | `MIN_VOLUME_24H` | `100000` | Minimum 24h volume filter |
 | `CHAT_UPLOADS_DIR` | `data/chat_uploads` | Chat 图片上传目录 |
+| `TRADING_TIMEZONE` | `Asia/Shanghai` | 连亏闸门划分「当日」与「连续两天」所用的时区 |
 
 ## Conventions
 

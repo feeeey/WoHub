@@ -9,7 +9,9 @@ Wraps the raw fapi client with:
 """
 import json
 import secrets
+import threading
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -29,6 +31,16 @@ from trading.models import (
 from klines.fetcher import fetch_klines
 from klines.structure import find_pivot, atr as compute_atr
 from trading import position_plan as pp
+from trading.risk_guard import (
+    build_closed_order_outcomes,
+    evaluate_loss_guard,
+)
+
+
+_RISK_GUARD_CACHE_TTL_S = 15.0
+_RISK_GUARD_LOOKBACK_DAYS = 9
+_RISK_GUARD_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
+_RISK_GUARD_CACHE_LOCK = threading.Lock()
 
 
 def _resolve(credential_id: int) -> tuple[str, str, str]:
@@ -89,10 +101,241 @@ def get_account(credential_id: int) -> dict[str, Any]:
         "env": env,
         "total_wallet_balance": float(raw.get("totalWalletBalance", 0)),
         "total_unrealized_pnl": float(raw.get("totalUnrealizedProfit", 0)),
+        "total_margin_balance": float(
+            raw.get("totalMarginBalance")
+            or (
+                float(raw.get("totalWalletBalance", 0))
+                + float(raw.get("totalUnrealizedProfit", 0))
+            )
+        ),
         "available_balance": float(raw.get("availableBalance", 0)),
         "balances": [b.to_dict() for b in balances],
         "positions": [p.to_dict() for p in pos_objs],
     }
+
+
+def _load_realized_pnl_income(
+    env: str,
+    api_key: str,
+    secret: str,
+    start_ms: int,
+    end_ms: int,
+) -> list[dict]:
+    rows: list[dict] = []
+    page = 1
+    while page <= 10:
+        batch = bn.income_history(
+            env, api_key, secret,
+            income_type="REALIZED_PNL",
+            start_time=start_ms,
+            end_time=end_ms,
+            page=page,
+            limit=1000,
+        )
+        rows.extend(batch)
+        if len(batch) < 1000:
+            return rows
+        page += 1
+    raise ValueError("已实现盈亏记录超过 10000 条，无法完整评估连亏风险")
+
+
+def _load_user_trades_for_guard(
+    env: str,
+    api_key: str,
+    secret: str,
+    symbols: set[str],
+    start_ms: int,
+    end_ms: int,
+) -> list[dict]:
+    """Load fills in <=7-day windows as required by Binance."""
+    rows: list[dict] = []
+    window_ms = int(timedelta(days=5).total_seconds() * 1000)
+    for symbol in sorted(symbols):
+        cursor = start_ms
+        while cursor <= end_ms:
+            window_end = min(cursor + window_ms, end_ms)
+            batch = bn.user_trades(
+                env, api_key, secret, symbol,
+                start_time=cursor,
+                end_time=window_end,
+                limit=1000,
+            )
+            if len(batch) >= 1000:
+                raise ValueError(
+                    f"{symbol} 在风险检查窗口内成交超过 1000 条，"
+                    "无法保证历史完整，已禁止开仓")
+            rows.extend(batch)
+            cursor = window_end + 1
+    return rows
+
+
+def get_loss_guard_status(
+    credential_id: int,
+    *,
+    force_refresh: bool = False,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return the account-wide daily/weekly loss-streak opening gate.
+
+    Preview/UI reads may use a short cache. Final order submission always calls
+    with force_refresh=True so a just-closed losing trade cannot be missed.
+    """
+    use_cache = not force_refresh and now is None
+    if use_cache:
+        with _RISK_GUARD_CACHE_LOCK:
+            cached = _RISK_GUARD_CACHE.get(credential_id)
+        if cached and time.monotonic() - cached[0] < _RISK_GUARD_CACHE_TTL_S:
+            return cached[1]
+
+    now_utc = now or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    else:
+        now_utc = now_utc.astimezone(timezone.utc)
+    start_utc = now_utc - timedelta(days=_RISK_GUARD_LOOKBACK_DAYS)
+    start_ms = int(start_utc.timestamp() * 1000)
+    end_ms = int(now_utc.timestamp() * 1000)
+
+    env, api_key, secret = _resolve(credential_id)
+    income_rows = _load_realized_pnl_income(
+        env, api_key, secret, start_ms, end_ms)
+    symbols = {
+        str(row.get("symbol") or "").upper()
+        for row in income_rows
+        if row.get("incomeType") == "REALIZED_PNL" and row.get("symbol")
+    }
+    trade_rows = _load_user_trades_for_guard(
+        env, api_key, secret, symbols, start_ms, end_ms)
+    outcomes = build_closed_order_outcomes(income_rows, trade_rows)
+    status = evaluate_loss_guard(
+        outcomes,
+        now=now_utc,
+        timezone_name=settings.trading_timezone,
+    )
+    status.update({
+        "credential_id": credential_id,
+        "env": env,
+        "history_start": start_utc.astimezone(
+            timezone.utc).isoformat().replace("+00:00", "Z"),
+        "history_end": now_utc.isoformat().replace("+00:00", "Z"),
+        "outcome_count": len(outcomes),
+        "source": "Binance REALIZED_PNL + userTrades(orderId 聚合)",
+    })
+    if now is None:
+        with _RISK_GUARD_CACHE_LOCK:
+            _RISK_GUARD_CACHE[credential_id] = (time.monotonic(), status)
+    return status
+
+
+def prepare_fixed_risk_order(
+    *,
+    credential_id: int,
+    symbol: str,
+    side: str,
+    order_type: str,
+    quantity: float | None,
+    leverage: int,
+    risk_pct: float = 1.0,
+    reward_risk_ratio: float = pp.MIN_REWARD_RISK_RATIO,
+    stop_loss_price: float | None = None,
+    take_profit_price: float | None = None,
+    force_guard_refresh: bool = False,
+) -> dict[str, Any]:
+    """Preview and validate the terminal's mandatory fixed-risk entry policy.
+
+    This function places no order. It reads the latest account equity, mark
+    price, symbol filters, positions and open orders, then produces the exact
+    executable quantity/SL/TP values that the bracket route must use.
+
+    Strict mode currently accepts MARKET entries only. A LIMIT entry can sit
+    unfilled while a closePosition trigger expires before the entry fills;
+    without a persistent fill watcher that cannot guarantee protection.
+    """
+    symbol = symbol.upper()
+    if side not in ("BUY", "SELL"):
+        raise ValueError("side must be BUY or SELL")
+    if order_type != "MARKET":
+        raise ValueError("严格风控开仓目前仅支持市价单；限价单成交联动保护尚未实现")
+
+    guard = get_loss_guard_status(
+        credential_id, force_refresh=force_guard_refresh)
+    if not guard["allowed"]:
+        raise ValueError(
+            f"风险闸门已锁定：{guard['reason']}；解锁时间 {guard['lock_until']}")
+
+    env, api_key, secret = _resolve(credential_id)
+    raw_acct = bn.account_info(env, api_key, secret)
+
+    # closePosition protection orders and reduceOnly exits in this module are
+    # deliberately one-way-mode semantics. Refuse hedge mode rather than send
+    # an order that cannot be protected as promised.
+    if any(
+        p.get("positionSide") in ("LONG", "SHORT")
+        for p in raw_acct.get("positions", [])
+    ):
+        raise ValueError("严格风控开仓仅支持币安单向持仓模式（positionSide=BOTH）")
+
+    existing_position = next(
+        (
+            p for p in raw_acct.get("positions", [])
+            if p.get("symbol") == symbol
+            and float(p.get("positionAmt", 0) or 0) != 0
+        ),
+        None,
+    )
+    if existing_position:
+        raise ValueError(
+            f"{symbol} 已有持仓；整仓止损会混合风险，严格风控禁止同币种加仓")
+
+    existing_orders = bn.open_orders(env, api_key, secret, symbol=symbol)
+    if existing_orders:
+        raise ValueError(
+            f"{symbol} 已有 {len(existing_orders)} 个未完成委托；"
+            "请先处理后再按严格风控开仓")
+
+    equity = float(
+        raw_acct.get("totalMarginBalance")
+        or (
+            float(raw_acct.get("totalWalletBalance", 0))
+            + float(raw_acct.get("totalUnrealizedProfit", 0))
+        )
+    )
+    available = float(raw_acct.get("availableBalance", 0))
+    entry = float(bn.mark_price(env, api_key, symbol).get("markPrice", 0))
+    if entry <= 0:
+        raise ValueError(f"无法获取 {symbol} 的有效标记价格")
+
+    filters = pp.parse_filters(
+        bn.exchange_info(env, api_key), symbol, order_type="MARKET")
+    direction = "long" if side == "BUY" else "short"
+    plan = pp.compute_fixed_risk_order(
+        direction=direction,
+        entry_price=entry,
+        equity=equity,
+        available_balance=available,
+        leverage=leverage,
+        filters=filters,
+        risk_pct=risk_pct,
+        reward_risk_ratio=reward_risk_ratio,
+        quantity=quantity,
+        stop_price=stop_loss_price,
+        take_profit_price=take_profit_price,
+    ).to_dict()
+    plan.update({
+        "symbol": symbol,
+        "side": side,
+        "direction": direction,
+        "order_type": order_type,
+        "funds_source": "totalMarginBalance",
+        "env": env,
+        "fee_slippage_excluded": True,
+        "loss_guard": {
+            "allowed": guard["allowed"],
+            "today": guard["today"],
+            "lock_scope": guard["lock_scope"],
+        },
+    })
+    return plan
 
 
 def _record_order(

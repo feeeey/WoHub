@@ -253,6 +253,10 @@ export const api = {
     return request(`/trading/account/${credentialId}`)
   },
 
+  async getTradingRiskGuard(credentialId) {
+    return request(`/trading/risk-guard/${credentialId}`)
+  },
+
   async placeTradingOrder(data) {
     return request('/trading/order', { method: 'POST', body: JSON.stringify(data) })
   },
@@ -263,6 +267,10 @@ export const api = {
 
   async placeBracketOrder(data) {
     return request('/trading/order/bracket', { method: 'POST', body: JSON.stringify(data) })
+  },
+
+  async previewBracketOrder(data) {
+    return request('/trading/order/preview', { method: 'POST', body: JSON.stringify(data) })
   },
 
   async closeTradingPosition(credentialId, symbol) {

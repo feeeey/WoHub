@@ -20,6 +20,8 @@ class Settings:
         self.port = int(os.environ.get("PORT", "8080"))
         self.debug = os.environ.get("DEBUG", "false").lower() == "true"
         self.cache_ttl = int(os.environ.get("CACHE_TTL", "15"))
+        self.trading_timezone = os.environ.get(
+            "TRADING_TIMEZONE", "Asia/Shanghai")
         self.min_volume_24h = float(os.environ.get("MIN_VOLUME_24H", "100000"))
         self.proxy_enabled = os.environ.get("PROXY_ENABLED", "false").lower() == "true"
         self.proxy_host = os.environ.get("PROXY_HOST", "host.docker.internal")

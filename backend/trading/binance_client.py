@@ -176,11 +176,46 @@ def exchange_info(env: str, api_key: str) -> dict:
     return _request("GET", env, "/fapi/v1/exchangeInfo", api_key, None)
 
 
+def mark_price(env: str, api_key: str, symbol: str) -> dict:
+    """GET /fapi/v1/premiumIndex — current mark price for one symbol."""
+    return _request(
+        "GET", env, "/fapi/v1/premiumIndex", api_key, None,
+        {"symbol": symbol},
+    )
+
+
 # ---- Signed endpoints ----------------------------------------------------
 
 def account_info(env: str, api_key: str, api_secret: str) -> dict:
     """GET /fapi/v2/account — balances, positions, multi-asset mode."""
     return _request("GET", env, "/fapi/v2/account", api_key, api_secret, signed=True)
+
+
+def income_history(
+    env: str,
+    api_key: str,
+    api_secret: str,
+    *,
+    income_type: str | None = None,
+    start_time: int | None = None,
+    end_time: int | None = None,
+    page: int = 1,
+    limit: int = 1000,
+) -> list[dict]:
+    """GET /fapi/v1/income — account income history across all symbols."""
+    if not (1 <= limit <= 1000):
+        raise ValueError("limit must be in [1, 1000]")
+    params: dict[str, Any] = {"page": page, "limit": limit}
+    if income_type:
+        params["incomeType"] = income_type
+    if start_time is not None:
+        params["startTime"] = start_time
+    if end_time is not None:
+        params["endTime"] = end_time
+    return _request(
+        "GET", env, "/fapi/v1/income", api_key, api_secret,
+        params, signed=True,
+    )
 
 
 def position_risk(env: str, api_key: str, api_secret: str, symbol: str | None = None) -> list[dict]:
@@ -226,6 +261,7 @@ def place_order(
     reduce_only: bool = False,
     close_position: bool = False,
     time_in_force: str = "GTC",
+    working_type: str = "MARK_PRICE",
     new_client_order_id: str | None = None,
 ) -> dict:
     """POST /fapi/v1/order.
@@ -270,7 +306,10 @@ def place_order(
     elif order_type in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
         if stop_price is None:
             raise ValueError(f"{order_type} requires stop_price")
+        if working_type not in ("MARK_PRICE", "CONTRACT_PRICE"):
+            raise ValueError(f"unsupported working_type: {working_type}")
         params["stopPrice"] = stop_price
+        params["workingType"] = working_type
         if close_position:
             # Closes the whole position on trigger; quantity is forbidden by
             # the API in this mode. closePosition implies reduceOnly.
@@ -362,4 +401,28 @@ def all_orders(
         "GET", env, "/fapi/v1/allOrders", api_key, api_secret,
         {"symbol": symbol, "limit": limit},
         signed=True,
+    )
+
+
+def user_trades(
+    env: str,
+    api_key: str,
+    api_secret: str,
+    symbol: str,
+    *,
+    start_time: int | None = None,
+    end_time: int | None = None,
+    limit: int = 1000,
+) -> list[dict]:
+    """GET /fapi/v1/userTrades — fills for one symbol, including realizedPnl."""
+    if not (1 <= limit <= 1000):
+        raise ValueError("limit must be in [1, 1000]")
+    params: dict[str, Any] = {"symbol": symbol.upper(), "limit": limit}
+    if start_time is not None:
+        params["startTime"] = start_time
+    if end_time is not None:
+        params["endTime"] = end_time
+    return _request(
+        "GET", env, "/fapi/v1/userTrades", api_key, api_secret,
+        params, signed=True,
     )

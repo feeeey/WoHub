@@ -1331,6 +1331,7 @@ def test_place_order_stop_market_with_close_position(monkeypatch):
     )
     assert "type=STOP_MARKET" in captured["url"]
     assert "stopPrice=65000.0" in captured["url"]
+    assert "workingType=MARK_PRICE" in captured["url"]
     assert "closePosition=true" in captured["url"]
     # quantity must NOT be in the request (Binance forbids it with closePosition)
     assert "quantity=" not in captured["url"]

@@ -83,7 +83,8 @@
           {{ currentEnv === 'mainnet' ? '⚠️ 实盘' : '🧪 测试网' }}
         </div>
         <div v-if="account" class="account-inline">
-          <span>余额 <strong>{{ fmt(account.total_wallet_balance) }}</strong></span>
+          <span>总资金 <strong>{{ fmt(account.total_margin_balance) }}</strong></span>
+          <span>钱包 <strong>{{ fmt(account.total_wallet_balance) }}</strong></span>
           <span>可用 <strong>{{ fmt(account.available_balance) }}</strong></span>
           <span :class="account.total_unrealized_pnl >= 0 ? 'clr-positive' : 'clr-negative'">
             未实现盈亏 <strong>{{ pnlSign(account.total_unrealized_pnl) }}{{ fmt(account.total_unrealized_pnl) }}</strong>
@@ -93,6 +94,22 @@
                 @click="onKillSwitch">
           {{ killing ? '执行中…' : '⛔ 一键全平' }}
         </button>
+      </div>
+
+      <div v-if="riskGuard" class="risk-guard-bar card"
+           :class="riskGuard.allowed ? 'clear' : 'locked'">
+        <div class="risk-guard-main">
+          <strong>{{ riskGuard.allowed ? '风险闸门正常' : '风险闸门已锁定' }}</strong>
+          <span v-if="riskGuard.allowed">
+            今日当前连亏 {{ riskGuard.today?.current_loss_streak || 0 }}/3，
+            今日最大连亏 {{ riskGuard.today?.max_loss_streak || 0 }}/3
+          </span>
+          <span v-else>{{ riskGuard.reason }}</span>
+        </div>
+        <div class="risk-guard-meta">
+          <span>{{ riskGuard.timezone || 'Asia/Shanghai' }}</span>
+          <span v-if="riskGuard.lock_until">解锁：{{ fmtGuardTime(riskGuard.lock_until) }}</span>
+        </div>
       </div>
 
       <div v-if="errorMsg" class="error-bar">{{ errorMsg }}</div>
@@ -145,7 +162,10 @@
             ref="tradeFormRef"
             :symbol="symbol"
             :credential-id="selectedCredentialId"
-            :submitting="submitting"
+            :account-equity="account?.total_margin_balance || 0"
+            :trading-allowed="tradingAllowed"
+            :trading-lock-reason="tradingLockReason"
+            :submitting="submitting || previewing"
             :computing="planComputing"
             @open-confirm="onOpenConfirm"
             @compute-plan="onComputePlan"
@@ -337,19 +357,31 @@
         </div>
         <div class="confirm-line">
           <span class="confirm-label">数量 / 杠杆</span>
-          <span class="confirm-value">{{ pendingPayload.quantity }} 张 · ×{{ pendingPayload.leverage }}</span>
+          <span class="confirm-value">{{ riskPreview?.quantity }} 张 · ×{{ pendingPayload.leverage }}</span>
         </div>
-        <div v-if="pendingPayload.order_type === 'LIMIT'" class="confirm-line">
-          <span class="confirm-label">限价</span>
-          <span class="confirm-value">{{ pendingPayload.price }}</span>
+        <div class="confirm-line">
+          <span class="confirm-label">总资金 / 风险</span>
+          <span class="confirm-value">
+            {{ fmt(riskPreview?.equity) }} U · {{ riskPreview?.risk_pct }}%
+            ≈ {{ fmt(riskPreview?.estimated_loss) }} U
+          </span>
         </div>
-        <div v-if="pendingPayload.stop_loss_price" class="confirm-line">
+        <div class="confirm-line">
+          <span class="confirm-label">参考入场价（标记价）</span>
+          <span class="confirm-value">{{ fmt(riskPreview?.entry_price) }}</span>
+        </div>
+        <div class="confirm-line">
           <span class="confirm-label">止损 (SL)</span>
-          <span class="confirm-value clr-negative">{{ pendingPayload.stop_loss_price }} · 触发市价整仓平</span>
+          <span class="confirm-value clr-negative">
+            {{ riskPreview?.stop_price }} · 预计 -{{ fmt(riskPreview?.estimated_loss) }} U
+          </span>
         </div>
-        <div v-if="pendingPayload.take_profit_price" class="confirm-line">
+        <div class="confirm-line">
           <span class="confirm-label">止盈 (TP)</span>
-          <span class="confirm-value clr-positive">{{ pendingPayload.take_profit_price }} · 触发市价整仓平</span>
+          <span class="confirm-value clr-positive">
+            {{ riskPreview?.take_profit_price }} · 预计 +{{ fmt(riskPreview?.estimated_profit) }} U
+            · R {{ Number(riskPreview?.actual_reward_risk_ratio || 0).toFixed(2) }}
+          </span>
         </div>
         <div class="confirm-line">
           <span class="confirm-label">环境</span>
@@ -359,6 +391,7 @@
             </span>
           </span>
         </div>
+        <p class="confirm-note">最终数量、止损和止盈由后端在提交时重新校验；金额不含手续费、资金费与滑点。</p>
         <p v-if="submitError" class="modal-error">{{ submitError }}</p>
         <div class="modal-actions">
           <button class="btn" @click="confirmOpen = false" :disabled="submitting">取消</button>
@@ -431,6 +464,7 @@ function toggleLevel(k) {
 const credentials = ref([])
 const selectedCredentialId = ref(null)
 const account = ref(null)
+const riskGuard = ref(null)
 const openOrders = ref([])
 const auditOrders = ref([])
 const history = ref([])
@@ -439,6 +473,11 @@ const histSymbol = ref('')
 const currentEnv = computed(() => {
   const c = credentials.value.find(c => c.id === selectedCredentialId.value)
   return c?.env || 'testnet'
+})
+const tradingAllowed = computed(() => riskGuard.value?.allowed === true)
+const tradingLockReason = computed(() => {
+  if (!riskGuard.value) return '正在核验交易历史与连亏状态'
+  return riskGuard.value.reason || (riskGuard.value.allowed ? '' : '无法确认风险闸门状态')
 })
 
 const tabs = computed(() => [
@@ -622,10 +661,27 @@ async function loadKlines() {
 
 async function loadAccountAndOrders() {
   if (!selectedCredentialId.value) return
+  if (riskGuard.value?.credential_id !== selectedCredentialId.value) {
+    riskGuard.value = null
+  }
   planResult.value = null
   planError.value = ''
   const promises = [
     api.getTradingAccount(selectedCredentialId.value).then(d => { account.value = d }).catch(() => { account.value = null }),
+    api.getTradingRiskGuard(selectedCredentialId.value)
+      .then(d => { riskGuard.value = d })
+      .catch((e) => {
+        riskGuard.value = {
+          credential_id: selectedCredentialId.value,
+          allowed: false,
+          locked: true,
+          lock_scope: 'verification',
+          reason: `无法核验交易历史，系统已禁止开仓：${e.message}`,
+          timezone: 'Asia/Shanghai',
+          today: {},
+          lock_until: null,
+        }
+      }),
     api.getOpenOrders(selectedCredentialId.value).then(d => { openOrders.value = d.orders || [] }).catch(() => { openOrders.value = [] }),
     api.getTradingOrders(20).then(d => { auditOrders.value = d.orders || [] }).catch(() => { auditOrders.value = [] }),
   ]
@@ -650,11 +706,13 @@ async function loadHistory() {
 // ---- actions ----
 
 const submitting = ref(false)
+const previewing = ref(false)
 const confirmOpen = ref(false)
 const submitError = ref('')
 const recoveryAlert = ref(null)   // { level: 'danger'|'warn'|'info', text: string }
 const killing = ref(false)
 const pendingPayload = ref({})
+const riskPreview = ref(null)
 
 // ---- smart plan (read-only: structure stop + risk sizing) ----
 
@@ -684,10 +742,23 @@ async function onComputePlan(req) {
   }
 }
 
-function onOpenConfirm(payload) {
+async function onOpenConfirm(payload) {
   submitError.value = ''
+  if (!tradingAllowed.value) {
+    errorMsg.value = `风险闸门禁止开仓：${tradingLockReason.value}`
+    return
+  }
   pendingPayload.value = payload
-  confirmOpen.value = true
+  riskPreview.value = null
+  previewing.value = true
+  try {
+    riskPreview.value = await api.previewBracketOrder(payload)
+    confirmOpen.value = true
+  } catch (e) {
+    errorMsg.value = `风控校验失败：${e.message}`
+  } finally {
+    previewing.value = false
+  }
 }
 
 async function submitOrder() {
@@ -695,6 +766,7 @@ async function submitOrder() {
   submitError.value = ''
   try {
     const res = await api.placeBracketOrder(pendingPayload.value)
+    if (res.risk_plan) riskPreview.value = res.risk_plan
     recoveryAlert.value = null
     if (res.recovery) {
       recoveryAlert.value = res.recovery.naked_position
@@ -796,6 +868,14 @@ function fmtTime(ms) {
   const d = new Date(Number(ms))
   const pad = n => String(n).padStart(2, '0')
   return `${d.getMonth() + 1}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+function fmtGuardTime(iso) {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  return d.toLocaleString('zh-CN', {
+    timeZone: riskGuard.value?.timezone || 'Asia/Shanghai',
+    hour12: false,
+  })
 }
 function catLabel(c) { return { single: '单根', double: '双根', triple: '三根' }[c] || c }
 function orderTypeLabel(t) {
@@ -929,6 +1009,38 @@ onUnmounted(() => {
   color: var(--text-primary);
   font-weight: 600;
   margin-left: 6px;
+}
+
+.risk-guard-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+  padding: 12px 18px;
+  border-left: 3px solid var(--success);
+}
+.risk-guard-bar.locked {
+  border-left-color: var(--danger);
+  background: var(--danger-subtle);
+}
+.risk-guard-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.risk-guard-main strong { font-size: 13px; color: var(--text-primary); }
+.risk-guard-main span { font-size: 12px; color: var(--text-secondary); }
+.risk-guard-bar.locked .risk-guard-main strong,
+.risk-guard-bar.locked .risk-guard-main span { color: var(--danger); }
+.risk-guard-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: 11px;
 }
 
 .error-bar {
@@ -1193,6 +1305,13 @@ onUnmounted(() => {
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
+  text-align: right;
+}
+.confirm-note {
+  margin: 12px 0 0;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 .modal-error {
   background: var(--danger-subtle);
